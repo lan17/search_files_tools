@@ -1,5 +1,20 @@
 # Search Files Tools
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/search-files-tools">
+    <img src="https://img.shields.io/npm/v/search-files-tools?logo=npm" alt="npm version">
+  </a>
+  <a href="https://github.com/lan17/search_files_tools/blob/main/package.json">
+    <img src="https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white" alt="Node 24 or newer">
+  </a>
+  <a href="https://github.com/lan17/search_files_tools/actions/workflows/lint.yml">
+    <img src="https://github.com/lan17/search_files_tools/actions/workflows/lint.yml/badge.svg" alt="CI">
+  </a>
+  <a href="https://app.codecov.io/gh/lan17/search_files_tools">
+    <img src="https://codecov.io/gh/lan17/search_files_tools/graph/badge.svg?branch=main" alt="Codecov">
+  </a>
+</p>
+
 OpenClaw plugin for searching and globbing files from agents.
 
 ## Features
