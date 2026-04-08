@@ -4,17 +4,7 @@
   ],
   "tagFormat": "v${version}",
   "plugins": [
-    [
-      "@semantic-release/commit-analyzer",
-      {
-        "releaseRules": [
-          {
-            "type": "docs",
-            "release": "minor"
-          }
-        ]
-      }
-    ],
+    "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",
     "@semantic-release/npm",
     [

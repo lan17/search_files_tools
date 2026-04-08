@@ -64,13 +64,13 @@ describe("files_glob", () => {
     }
   });
 
-  it("respects root ignore files when requested", async () => {
+  it("respects nested ignore files when requested", async () => {
     const root = await createTempDir();
     try {
       await writeFiles(root, {
-        ".gitignore": "ignored.ts\n",
-        "ignored.ts": "ignored",
-        "kept.ts": "kept",
+        "src/.gitignore": "ignored.ts\n",
+        "src/ignored.ts": "ignored",
+        "src/kept.ts": "kept",
       });
 
       const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
@@ -81,7 +81,48 @@ describe("files_glob", () => {
       });
       const details = result.details as { files: string[] };
 
-      expect(details.files).toEqual(["kept.ts"]);
+      expect(details.files).toEqual(["src/kept.ts"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("caps maxResults at the configured plugin limit and rejects non-integers", async () => {
+    const root = await createTempDir();
+    try {
+      await writeFiles(root, {
+        "a.ts": "a",
+        "b.ts": "b",
+        "c.ts": "c",
+      });
+
+      const tool = createFilesGlobTool({
+        config: {
+          ...DEFAULT_PLUGIN_CONFIG,
+          maxGlobResults: 2,
+        },
+      });
+
+      const result = await tool.execute("call", {
+        root,
+        patterns: ["**/*.ts"],
+        maxResults: 10,
+      });
+      const details = result.details as { files: string[]; truncated: boolean; count: number };
+
+      expect(details).toMatchObject({
+        truncated: true,
+        count: 2,
+        files: ["a.ts", "b.ts"],
+      });
+
+      await expect(
+        tool.execute("call", {
+          root,
+          patterns: ["**/*.ts"],
+          maxResults: 1.5,
+        }),
+      ).rejects.toThrow("maxResults must be a positive integer");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -145,6 +186,69 @@ describe("files_glob", () => {
     } finally {
       await fs.rm(workspaceRoot, { recursive: true, force: true });
       await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks symlink escapes when followSymlinks is enabled", async () => {
+    const workspaceRoot = await createTempDir("workspace-");
+    const outsideRoot = await createTempDir("outside-");
+
+    try {
+      const projectRoot = path.join(workspaceRoot, "project");
+      await fs.mkdir(projectRoot, { recursive: true });
+      await writeFiles(projectRoot, {
+        "allowed.txt": "safe",
+      });
+      await writeFiles(outsideRoot, {
+        "secret.txt": "secret",
+      });
+      await fs.symlink(outsideRoot, path.join(projectRoot, "escape"));
+
+      const tool = createFilesGlobTool({
+        config: DEFAULT_PLUGIN_CONFIG,
+        context: {
+          fsPolicy: { workspaceOnly: true },
+          workspaceDir: workspaceRoot,
+          sandboxed: true,
+        },
+      });
+
+      const result = await tool.execute("call", {
+        root: projectRoot,
+        patterns: ["**/*.txt"],
+        followSymlinks: true,
+      });
+      const details = result.details as { files: string[] };
+
+      expect(details.files).toEqual(["allowed.txt"]);
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("supports cancellation while globbing", async () => {
+    const root = await createTempDir();
+    try {
+      await writeFiles(root, {
+        "a.ts": "a",
+      });
+      const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        tool.execute(
+          "call",
+          {
+            root,
+            patterns: ["**/*.ts"],
+          },
+          controller.signal,
+        ),
+      ).rejects.toThrow("file enumeration aborted");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });

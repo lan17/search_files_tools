@@ -3,7 +3,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_PLUGIN_CONFIG } from "../src/config.ts";
 import { createFilesSearchTool } from "../src/files-search-tool.ts";
-import { clearSearchBackendCache, resolveSearchBackend, runSearchWithBackend } from "../src/search-backend.ts";
+import {
+  MAX_STDERR_BYTES,
+  clearSearchBackendCache,
+  parseRipgrepMatchLine,
+  resolveSearchBackend,
+  runLineCommand,
+  runSearchWithBackend,
+} from "../src/search-backend.ts";
 import { createTempDir, writeFiles } from "./helpers.ts";
 
 describe("files_search", () => {
@@ -32,6 +39,30 @@ describe("files_search", () => {
           countOnly: true,
         }),
       ).rejects.toThrow("filesWithMatches and countOnly cannot both be true");
+
+      await expect(
+        tool.execute("call", {
+          root,
+          pattern: "foo",
+          beforeContext: 1.5,
+        }),
+      ).rejects.toThrow("beforeContext must be a non-negative integer");
+
+      await expect(
+        tool.execute("call", {
+          root,
+          pattern: "foo",
+          afterContext: 2.5,
+        }),
+      ).rejects.toThrow("afterContext must be a non-negative integer");
+
+      await expect(
+        tool.execute("call", {
+          root,
+          pattern: "foo",
+          maxMatchesPerFile: 2.5,
+        }),
+      ).rejects.toThrow("maxMatchesPerFile must be a positive integer");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -261,6 +292,46 @@ describe("files_search", () => {
       await fs.rm(outsideRoot, { recursive: true, force: true });
     }
   });
+
+  it("blocks symlink escapes when followSymlinks is enabled", async () => {
+    const workspaceRoot = await createTempDir("workspace-");
+    const outsideRoot = await createTempDir("outside-");
+
+    try {
+      const projectRoot = path.join(workspaceRoot, "project");
+      await fs.mkdir(projectRoot, { recursive: true });
+      await writeFiles(projectRoot, {
+        "allowed.txt": "needle\n",
+      });
+      await writeFiles(outsideRoot, {
+        "secret.txt": "needle\n",
+      });
+      await fs.symlink(outsideRoot, path.join(projectRoot, "escape"));
+
+      const tool = createFilesSearchTool({
+        config: DEFAULT_PLUGIN_CONFIG,
+        context: {
+          fsPolicy: { workspaceOnly: true },
+          workspaceDir: workspaceRoot,
+          sandboxed: true,
+        },
+      });
+
+      const result = await tool.execute("call", {
+        root: projectRoot,
+        pattern: "needle",
+        followSymlinks: true,
+      });
+      const details = result.details as {
+        matches: Array<{ path: string; line: number; text: string }>;
+      };
+
+      expect(details.matches).toEqual([{ path: "allowed.txt", line: 1, text: "needle" }]);
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("search backend", () => {
@@ -301,5 +372,28 @@ describe("search backend", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("returns null for malformed ripgrep JSON lines", () => {
+    expect(parseRipgrepMatchLine("{not-json")).toBeNull();
+  });
+
+  it("caps stderr output collected from child processes", async () => {
+    const result = await runLineCommand({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stderr.write('x'.repeat(70000)); process.stdout.write('ok\\n');",
+      ],
+      timeoutMs: DEFAULT_PLUGIN_CONFIG.timeoutMs,
+      onLine: () => {
+        // No-op.
+      },
+    });
+
+    expect(result.stderr.endsWith("[stderr truncated]")).toBe(true);
+    expect(result.stderr.length).toBeLessThanOrEqual(
+      MAX_STDERR_BYTES + "\n[stderr truncated]".length,
+    );
   });
 });
