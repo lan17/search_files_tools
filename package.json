@@ -9,13 +9,13 @@
     "glob",
     "files"
   ],
-  "homepage": "https://github.com/openclaw/search-files-tools#readme",
+  "homepage": "https://github.com/lan17/search_files_tools#readme",
   "bugs": {
-    "url": "https://github.com/openclaw/search-files-tools/issues"
+    "url": "https://github.com/lan17/search_files_tools/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/search-files-tools.git"
+    "url": "git+https://github.com/lan17/search_files_tools.git"
   },
   "files": [
     "index.ts",
@@ -33,7 +33,9 @@
     "lint": "oxlint .",
     "lint:fix": "oxlint . --fix",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "release": "semantic-release"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.41",
@@ -41,8 +43,15 @@
     "ignore": "^7.0.5"
   },
   "devDependencies": {
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^11.0.6",
+    "@semantic-release/npm": "^12.0.2",
+    "@semantic-release/release-notes-generator": "^14.1.0",
     "@types/node": "^24.5.2",
+    "@vitest/coverage-v8": "^4.0.18",
     "oxlint": "^0.15.0",
+    "semantic-release": "^25.0.1",
     "typescript": "^5.9.2",
     "vitest": "^4.0.18"
   },

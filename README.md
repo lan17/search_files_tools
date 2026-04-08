@@ -52,4 +52,5 @@ List files below an absolute `root` path that match one or more glob
 npm run lint
 npm run typecheck
 npm test
+npm run coverage
 ```
