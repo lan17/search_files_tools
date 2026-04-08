@@ -1,0 +1,63 @@
+{
+  "name": "search-files-tools",
+  "version": "0.1.0",
+  "description": "OpenClaw plugin for searching and globbing files",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "grep",
+    "glob",
+    "files"
+  ],
+  "homepage": "https://github.com/lan17/search_files_tools#readme",
+  "bugs": {
+    "url": "https://github.com/lan17/search_files_tools/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lan17/search_files_tools.git"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "types",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "release": "semantic-release"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.41",
+    "fast-glob": "^3.3.3",
+    "ignore": "^7.0.5"
+  },
+  "devDependencies": {
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^11.0.6",
+    "@semantic-release/npm": "^12.0.2",
+    "@semantic-release/release-notes-generator": "^14.1.0",
+    "@types/node": "^24.5.2",
+    "@vitest/coverage-v8": "^4.0.18",
+    "oxlint": "^0.15.0",
+    "semantic-release": "^25.0.1",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.18"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

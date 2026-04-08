@@ -1,0 +1,49 @@
+{
+  "id": "search-files-tools",
+  "name": "Search Files Tools",
+  "description": "Adds tools for searching file contents and globbing files under absolute roots.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 20000
+      },
+      "maxCandidateFiles": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 20000
+      },
+      "maxSearchResults": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 2000
+      },
+      "maxGlobResults": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 5000
+      }
+    }
+  },
+  "uiHints": {
+    "timeoutMs": {
+      "label": "Timeout (ms)",
+      "help": "Maximum wall-clock time for each search or glob tool invocation."
+    },
+    "maxCandidateFiles": {
+      "label": "Max Candidate Files",
+      "help": "Maximum number of candidate files to enumerate before marking the search as truncated."
+    },
+    "maxSearchResults": {
+      "label": "Max Search Results",
+      "help": "Maximum number of search result entries returned by files_search."
+    },
+    "maxGlobResults": {
+      "label": "Max Glob Results",
+      "help": "Maximum number of file paths returned by files_glob."
+    }
+  }
+}
