@@ -27,15 +27,20 @@ OpenClaw plugin for searching and globbing files from agents.
 ## Install
 
 ```bash
-openclaw plugins install search-files-tools
+openclaw plugins install search-files-tools --dangerously-force-unsafe-install
 ```
 
 For local development:
 
 ```bash
 npm install
-openclaw plugins install -l /absolute/path/to/search_files_tools
+openclaw plugins install -l /absolute/path/to/search_files_tools --dangerously-force-unsafe-install
 ```
+
+This plugin intentionally shells out to `rg` or `grep` for search execution.
+OpenClaw's built-in plugin safety scanner treats `node:child_process` usage as
+unsafe code, so installation requires the explicit
+`--dangerously-force-unsafe-install` override.
 
 ## Configuration
 
