@@ -31,7 +31,7 @@ const FilesGlobSchema = Type.Object(
     ),
     followSymlinks: Type.Optional(Type.Boolean({ description: "Follow symbolic links while globbing." })),
     maxResults: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Optional per-call result cap. Defaults to the plugin maxGlobResults limit.",
         minimum: 1,
       }),
@@ -39,6 +39,16 @@ const FilesGlobSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+function resolveMaxResults(rawValue: unknown, configuredCap: number): number {
+  if (rawValue === undefined) {
+    return configuredCap;
+  }
+  if (typeof rawValue !== "number" || !Number.isInteger(rawValue) || rawValue <= 0) {
+    throw new Error("maxResults must be a positive integer");
+  }
+  return Math.min(rawValue, configuredCap);
+}
 
 export function createFilesGlobTool(params: {
   config: SearchFilesPluginConfig;
@@ -49,7 +59,7 @@ export function createFilesGlobTool(params: {
     label: "Files Glob",
     description: "List files matching glob patterns under an absolute root directory.",
     parameters: FilesGlobSchema,
-    execute: async (_toolCallId, rawParams) => {
+    execute: async (_toolCallId, rawParams, signal) => {
       const root = await resolveValidatedRoot(rawParams.root, params.context);
       const patterns = normalizeRelativePathList(rawParams.patterns, "patterns", normalizeGlobInput);
       if (patterns.length === 0) {
@@ -61,13 +71,7 @@ export function createFilesGlobTool(params: {
         "excludeGlobs",
         normalizeGlobInput,
       );
-      const maxResults =
-        typeof rawParams.maxResults === "number" && Number.isInteger(rawParams.maxResults)
-          ? rawParams.maxResults
-          : params.config.maxGlobResults;
-      if (maxResults <= 0) {
-        throw new Error("maxResults must be a positive integer");
-      }
+      const maxResults = resolveMaxResults(rawParams.maxResults, params.config.maxGlobResults);
 
       const enumerated = await enumerateFiles({
         rootReal: root.rootReal,
@@ -78,6 +82,7 @@ export function createFilesGlobTool(params: {
         respectIgnoreFiles: rawParams.respectIgnoreFiles === true,
         followSymlinks: rawParams.followSymlinks === true,
         maxResults,
+        signal,
       });
 
       const payload = {

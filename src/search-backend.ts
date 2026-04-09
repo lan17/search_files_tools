@@ -50,6 +50,7 @@ type LineRunnerParams = {
 };
 
 const MAX_BATCH_ARG_CHARS = 120_000;
+export const MAX_STDERR_BYTES = 64 * 1024;
 const executableCache = new Map<string, Promise<SearchBackend>>();
 
 function decodeRipgrepText(
@@ -170,7 +171,7 @@ function createFileBatches(files: string[]): string[][] {
   return batches;
 }
 
-async function runLineCommand(params: LineRunnerParams): Promise<{
+export async function runLineCommand(params: LineRunnerParams): Promise<{
   exitCode: number | null;
   stderr: string;
   stoppedEarly: boolean;
@@ -183,6 +184,8 @@ async function runLineCommand(params: LineRunnerParams): Promise<{
   let timedOut = false;
   let aborted = false;
   const stderrChunks: Buffer[] = [];
+  let stderrBytes = 0;
+  let stderrTruncated = false;
 
   const stop = () => {
     if (!stoppedEarly) {
@@ -203,7 +206,24 @@ async function runLineCommand(params: LineRunnerParams): Promise<{
   params.signal?.addEventListener("abort", abortListener, { once: true });
 
   child.stderr.on("data", (chunk: Buffer | string) => {
-    stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    if (stderrBytes >= MAX_STDERR_BYTES) {
+      stderrTruncated = true;
+      return;
+    }
+
+    const remainingBytes = MAX_STDERR_BYTES - stderrBytes;
+    if (buffer.length > remainingBytes) {
+      // This truncates on a byte boundary, which can split a UTF-8 codepoint, but stderr
+      // here is only diagnostic output and the hard memory cap matters more than perfect decoding.
+      stderrChunks.push(buffer.subarray(0, remainingBytes));
+      stderrBytes += remainingBytes;
+      stderrTruncated = true;
+      return;
+    }
+
+    stderrChunks.push(buffer);
+    stderrBytes += buffer.length;
   });
 
   const rl = readline.createInterface({
@@ -216,21 +236,23 @@ async function runLineCommand(params: LineRunnerParams): Promise<{
     child.once("close", (code) => resolve(code));
   });
 
+  let exitCode: number | null;
   try {
-    for await (const line of rl) {
-      params.onLine(line, stop);
-      if (stoppedEarly) {
-        break;
+    try {
+      for await (const line of rl) {
+        params.onLine(line, stop);
+        if (stoppedEarly) {
+          break;
+        }
       }
+    } finally {
+      rl.close();
     }
+    exitCode = await closePromise;
   } finally {
-    rl.close();
+    clearTimeout(timeout);
+    params.signal?.removeEventListener("abort", abortListener);
   }
-
-  const exitCode = await closePromise;
-
-  clearTimeout(timeout);
-  params.signal?.removeEventListener("abort", abortListener);
 
   if (timedOut) {
     throw new Error(`search process timed out after ${params.timeoutMs}ms`);
@@ -239,9 +261,12 @@ async function runLineCommand(params: LineRunnerParams): Promise<{
     throw new Error("search process aborted");
   }
 
+  const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
   return {
     exitCode,
-    stderr: Buffer.concat(stderrChunks).toString("utf8").trim(),
+    stderr: `${stderr}${
+      stderrTruncated ? `${stderr ? "\n" : ""}[stderr truncated]` : ""
+    }`,
     stoppedEarly,
   };
 }
@@ -250,11 +275,11 @@ function trimTrailingNewline(value: string): string {
   return value.replace(/\r?\n$/u, "");
 }
 
-function parseRipgrepMatchLine(line: string): SearchBackendMatch | null {
+export function parseRipgrepMatchLine(line: string): SearchBackendMatch | null {
   if (!line.trim()) {
     return null;
   }
-  const payload = JSON.parse(line) as {
+  let payload: {
     type?: string;
     data?: {
       path?: { text?: string; bytes?: string };
@@ -262,6 +287,18 @@ function parseRipgrepMatchLine(line: string): SearchBackendMatch | null {
       lines?: { text?: string; bytes?: string };
     };
   };
+  try {
+    payload = JSON.parse(line) as {
+      type?: string;
+      data?: {
+        path?: { text?: string; bytes?: string };
+        line_number?: number;
+        lines?: { text?: string; bytes?: string };
+      };
+    };
+  } catch {
+    return null;
+  }
   if (payload.type !== "match") {
     return null;
   }

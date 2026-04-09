@@ -83,6 +83,15 @@ export function isPathWithinFilters(relativePath: string, filters: string[]): bo
   });
 }
 
+export function isPathWithinRoot(rootReal: string, targetReal: string): boolean {
+  const relativeToRoot = path.relative(rootReal, targetReal);
+  return !(
+    relativeToRoot === ".." ||
+    relativeToRoot.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativeToRoot)
+  );
+}
+
 export async function resolveValidatedRoot(
   rootInput: unknown,
   context?: Pick<OpenClawPluginToolContext, "fsPolicy" | "workspaceDir">,
@@ -114,12 +123,7 @@ export async function resolveValidatedRoot(
     if (!workspaceDirReal) {
       throw new Error("workspace-only filesystem policy is active, but no workspace root is set");
     }
-    const relativeToWorkspace = path.relative(workspaceDirReal, rootReal);
-    if (
-      relativeToWorkspace === ".." ||
-      relativeToWorkspace.startsWith(`..${path.sep}`) ||
-      path.isAbsolute(relativeToWorkspace)
-    ) {
+    if (!isPathWithinRoot(workspaceDirReal, rootReal)) {
       throw new Error("root must stay within the active workspace");
     }
   }

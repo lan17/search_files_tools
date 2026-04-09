@@ -45,13 +45,13 @@ const FilesSearchSchema = Type.Object(
     wordMatch: Type.Optional(Type.Boolean({ description: "Require whole-word matches." })),
     lineMatch: Type.Optional(Type.Boolean({ description: "Require whole-line matches." })),
     beforeContext: Type.Optional(
-      Type.Number({ description: "Number of context lines to include before each match.", minimum: 0 }),
+      Type.Integer({ description: "Number of context lines to include before each match.", minimum: 0 }),
     ),
     afterContext: Type.Optional(
-      Type.Number({ description: "Number of context lines to include after each match.", minimum: 0 }),
+      Type.Integer({ description: "Number of context lines to include after each match.", minimum: 0 }),
     ),
     maxMatchesPerFile: Type.Optional(
-      Type.Number({ description: "Maximum number of matching lines to return per file.", minimum: 1 }),
+      Type.Integer({ description: "Maximum number of matching lines to return per file.", minimum: 1 }),
     ),
     filesWithMatches: Type.Optional(
       Type.Boolean({ description: "Return matching file paths instead of individual match lines." }),
@@ -134,7 +134,30 @@ function buildIncludePatterns(pathFilters: string[], includeGlobs: string[]): st
   return Array.from(patterns);
 }
 
-async function enrichMatchesWithContext(
+function readNonNegativeInteger(
+  value: unknown,
+  label: "beforeContext" | "afterContext",
+): number {
+  if (value === undefined) {
+    return 0;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function readOptionalPositiveInteger(value: unknown, label: "maxMatchesPerFile"): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+export async function enrichMatchesWithContext(
   matches: SearchBackendMatch[],
   beforeContext: number,
   afterContext: number,
@@ -211,7 +234,14 @@ async function enrichMatchesWithContext(
     );
   }
 
-  return matches.flatMap((match) => enriched.get(match.absolutePath)?.find((entry) => entry.line === match.line && entry.text === match.text) ?? []);
+  const nextMatchIndexByFile = new Map<string, number>();
+  return matches.flatMap((match) => {
+    const matchIndex = nextMatchIndexByFile.get(match.absolutePath) ?? 0;
+    nextMatchIndexByFile.set(match.absolutePath, matchIndex + 1);
+    const enrichedEntries = enriched.get(match.absolutePath);
+    const entry = enrichedEntries?.[matchIndex];
+    return entry ? [entry] : [];
+  });
 }
 
 function summarizeSearch(params: {
@@ -271,23 +301,12 @@ export function createFilesSearchTool(params: {
         "excludeGlobs",
         normalizeGlobInput,
       );
-      const beforeContext =
-        typeof rawParams.beforeContext === "number" && Number.isInteger(rawParams.beforeContext)
-          ? rawParams.beforeContext
-          : 0;
-      const afterContext =
-        typeof rawParams.afterContext === "number" && Number.isInteger(rawParams.afterContext)
-          ? rawParams.afterContext
-          : 0;
-      const maxMatchesPerFile =
-        typeof rawParams.maxMatchesPerFile === "number" &&
-        Number.isInteger(rawParams.maxMatchesPerFile)
-          ? rawParams.maxMatchesPerFile
-          : undefined;
-
-      if (beforeContext < 0 || afterContext < 0) {
-        throw new Error("beforeContext and afterContext must be non-negative integers");
-      }
+      const beforeContext = readNonNegativeInteger(rawParams.beforeContext, "beforeContext");
+      const afterContext = readNonNegativeInteger(rawParams.afterContext, "afterContext");
+      const maxMatchesPerFile = readOptionalPositiveInteger(
+        rawParams.maxMatchesPerFile,
+        "maxMatchesPerFile",
+      );
 
       const enumerated = await enumerateFiles({
         rootReal: root.rootReal,
@@ -298,6 +317,7 @@ export function createFilesSearchTool(params: {
         respectIgnoreFiles: rawParams.respectIgnoreFiles === true,
         followSymlinks: rawParams.followSymlinks === true,
         maxResults: params.config.maxCandidateFiles,
+        signal,
       });
 
       const backend = await (params.backendResolver ?? resolveSearchBackend)();
