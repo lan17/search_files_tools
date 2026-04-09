@@ -87,6 +87,31 @@ describe("files_glob", () => {
     }
   });
 
+  it("does not let nested ignore files re-include files from ignored directories", async () => {
+    const root = await createTempDir();
+    try {
+      await writeFiles(root, {
+        ".gitignore": "build/\n",
+        "build/.gitignore": "!keep.txt\n",
+        "build/keep.txt": "keep",
+        "kept.txt": "kept",
+      });
+
+      const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
+      const result = await tool.execute("call", {
+        root,
+        patterns: ["**/*.txt"],
+        includeHidden: true,
+        respectIgnoreFiles: true,
+      });
+      const details = result.details as { files: string[] };
+
+      expect(details.files).toEqual(["kept.txt"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("caps maxResults at the configured plugin limit and rejects non-integers", async () => {
     const root = await createTempDir();
     try {

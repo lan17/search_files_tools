@@ -223,6 +223,33 @@ describe("files_search", () => {
     }
   });
 
+  it("does not search files re-included from ignored directories", async () => {
+    const root = await createTempDir();
+    try {
+      await writeFiles(root, {
+        ".gitignore": "build/\n",
+        "build/.gitignore": "!keep.txt\n",
+        "build/keep.txt": "needle\n",
+        "kept.txt": "needle\n",
+      });
+
+      const tool = createFilesSearchTool({ config: DEFAULT_PLUGIN_CONFIG });
+      const result = await tool.execute("call", {
+        root,
+        pattern: "needle",
+        includeHidden: true,
+        respectIgnoreFiles: true,
+      });
+      const details = result.details as {
+        matches: Array<{ path: string; line: number; text: string }>;
+      };
+
+      expect(details.matches).toEqual([{ path: "kept.txt", line: 1, text: "needle" }]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("supports fixed-string, ignore-case, word, line, and maxMatchesPerFile behavior", async () => {
     const root = await createTempDir();
     try {

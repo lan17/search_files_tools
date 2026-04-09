@@ -72,6 +72,7 @@ function listIgnoreDirectories(relativePath: string): string[] {
 
 async function createIgnoreInspector(rootReal: string): Promise<IgnoreInspector> {
   const matcherCache = new Map<string, Promise<Ignore | null>>();
+  const ignoredDirectoryCache = new Map<string, Promise<boolean>>();
 
   const getMatcher = async (directoryRelativePath: string): Promise<Ignore | null> => {
     const cached = matcherCache.get(directoryRelativePath);
@@ -88,30 +89,61 @@ async function createIgnoreInspector(rootReal: string): Promise<IgnoreInspector>
     return await matcherPromise;
   };
 
+  const applyIgnoreRules = async (
+    targetRelativePath: string,
+    directoryRelativePaths: string[],
+  ): Promise<boolean> => {
+    let ignored = false;
+
+    for (const directoryRelativePath of directoryRelativePaths) {
+      const matcher = await getMatcher(directoryRelativePath);
+      if (!matcher) {
+        continue;
+      }
+
+      const relativeFromDirectory =
+        directoryRelativePath === "."
+          ? targetRelativePath
+          : path.posix.relative(directoryRelativePath, targetRelativePath);
+      const result = matcher.test(relativeFromDirectory);
+      if (result.ignored) {
+        ignored = true;
+      }
+      if (result.unignored) {
+        ignored = false;
+      }
+    }
+
+    return ignored;
+  };
+
+  const isDirectoryIgnored = async (directoryRelativePath: string): Promise<boolean> => {
+    if (directoryRelativePath === ".") {
+      return false;
+    }
+
+    const cached = ignoredDirectoryCache.get(directoryRelativePath);
+    if (cached) {
+      return await cached;
+    }
+
+    const ignoredPromise = applyIgnoreRules(
+      `${directoryRelativePath}/`,
+      listIgnoreDirectories(directoryRelativePath),
+    );
+    ignoredDirectoryCache.set(directoryRelativePath, ignoredPromise);
+    return await ignoredPromise;
+  };
+
   return {
     ignores: async (relativePath: string): Promise<boolean> => {
-      let ignored = false;
-
       for (const directoryRelativePath of listIgnoreDirectories(relativePath)) {
-        const matcher = await getMatcher(directoryRelativePath);
-        if (!matcher) {
-          continue;
-        }
-
-        const relativeFromDirectory =
-          directoryRelativePath === "."
-            ? relativePath
-            : path.posix.relative(directoryRelativePath, relativePath);
-        const result = matcher.test(relativeFromDirectory);
-        if (result.ignored) {
-          ignored = true;
-        }
-        if (result.unignored) {
-          ignored = false;
+        if (directoryRelativePath !== "." && await isDirectoryIgnored(directoryRelativePath)) {
+          return true;
         }
       }
 
-      return ignored;
+      return await applyIgnoreRules(relativePath, listIgnoreDirectories(relativePath));
     },
   };
 }
