@@ -1,54 +1,34 @@
 # Search Files Tools
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/search-files-tools">
-    <img src="https://img.shields.io/npm/v/search-files-tools?logo=npm" alt="npm version">
-  </a>
-  <a href="https://github.com/lan17/search_files_tools/blob/main/package.json">
-    <img src="https://img.shields.io/badge/node-%3E%3D24-339933?logo=node.js&logoColor=white" alt="Node 24 or newer">
-  </a>
-  <a href="https://github.com/lan17/search_files_tools/actions/workflows/lint.yml">
-    <img src="https://github.com/lan17/search_files_tools/actions/workflows/lint.yml/badge.svg" alt="CI">
-  </a>
-  <a href="https://app.codecov.io/gh/lan17/search_files_tools">
-    <img src="https://codecov.io/gh/lan17/search_files_tools/graph/badge.svg?branch=main" alt="Codecov">
-  </a>
-</p>
-
-OpenClaw plugin for searching and globbing files from agents.
+OpenClaw plugin for searching and globbing files from agents. Requires
+[ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`).
 
 ## Features
 
 - `files_search`: search file contents under an absolute root directory.
 - `files_glob`: list files matching glob patterns under an absolute root directory.
 - Shared root validation and OpenClaw filesystem policy enforcement.
-- `rg` preferred for search, with `grep` fallback.
+- Respects `.gitignore` by default (handled natively by `rg`).
 
 ## Install
 
 ```bash
-openclaw plugins install search-files-tools --dangerously-force-unsafe-install
+openclaw plugins install search-files-tools
 ```
 
 For local development:
 
 ```bash
 npm install
-openclaw plugins install -l /absolute/path/to/search_files_tools --dangerously-force-unsafe-install
+openclaw plugins install -l /absolute/path/to/search_files_tools
 ```
-
-This plugin intentionally shells out to `rg` or `grep` for search execution.
-OpenClaw's built-in plugin safety scanner treats `node:child_process` usage as
-unsafe code, so installation requires the explicit
-`--dangerously-force-unsafe-install` override.
 
 ## Configuration
 
-The plugin exposes four operational caps under
+The plugin exposes three operational caps under
 `plugins.entries.search-files-tools.config`:
 
 - `timeoutMs` default `20000`
-- `maxCandidateFiles` default `20000`
 - `maxSearchResults` default `2000`
 - `maxGlobResults` default `5000`
 
@@ -56,15 +36,35 @@ The plugin exposes four operational caps under
 
 ### `files_search`
 
-Search files below an absolute `root` path. Search results return root-relative
-POSIX paths and support structured options such as `patterns`,
-`includeGlobs`, `excludeGlobs`, `ignoreCase`, `fixedStrings`, and
-`beforeContext` / `afterContext`.
+Search files below an absolute `root` path.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `root` | `string` | **Required.** Absolute directory to search. |
+| `patterns` | `string[]` | **Required.** Search patterns (regex by default). |
+| `matchMode` | `"regex" \| "fixed" \| "word" \| "line"` | How patterns are interpreted. Default: `"regex"`. |
+| `outputMode` | `"matches" \| "files" \| "counts"` | What to return. Default: `"matches"`. |
+| `includeGlobs` | `string[]` | Restrict searched files (gitignore-style). |
+| `excludeGlobs` | `string[]` | Exclude files from search. |
+| `ignoreCase` | `boolean` | Case-insensitive matching. |
+| `beforeContext` | `integer` | Context lines before each match. |
+| `afterContext` | `integer` | Context lines after each match. |
+| `maxMatchesPerFile` | `integer` | Cap matches returned per file. |
+| `includeHidden` | `boolean` | Include dotfiles. |
+| `followSymlinks` | `boolean` | Follow symbolic links. |
 
 ### `files_glob`
 
-List files below an absolute `root` path that match one or more glob
-`patterns`. Results return root-relative POSIX paths.
+List files below an absolute `root` path that match one or more glob patterns.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `root` | `string` | **Required.** Absolute directory to list files in. |
+| `patterns` | `string[]` | **Required.** Glob patterns (gitignore-style). |
+| `excludeGlobs` | `string[]` | Glob patterns to exclude. |
+| `includeHidden` | `boolean` | Include dotfiles. |
+| `followSymlinks` | `boolean` | Follow symbolic links. |
+| `maxResults` | `integer` | Result cap (capped at config `maxGlobResults`). |
 
 ## Verification
 

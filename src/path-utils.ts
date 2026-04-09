@@ -8,79 +8,8 @@ export type ResolvedRoot = {
   workspaceDirReal?: string;
 };
 
-function normalizeUserPath(value: string): string {
-  return value.trim().replaceAll("\\", "/");
-}
-
-function hasParentTraversal(value: string): boolean {
-  return normalizeUserPath(value)
-    .split("/")
-    .some((segment) => segment === "..");
-}
-
 export function toPosixRelativePath(rootReal: string, absolutePath: string): string {
   return path.relative(rootReal, absolutePath).split(path.sep).join("/");
-}
-
-export function normalizeRelativePathInput(value: string, label: string): string {
-  const normalized = normalizeUserPath(value);
-  if (!normalized || normalized === ".") {
-    return ".";
-  }
-  if (path.isAbsolute(normalized)) {
-    throw new Error(`${label} must be relative to root`);
-  }
-  if (hasParentTraversal(normalized)) {
-    throw new Error(`${label} must not escape root`);
-  }
-  return normalized.replace(/^\.\/+/u, "");
-}
-
-export function normalizeGlobInput(value: string, label: string): string {
-  const normalized = normalizeUserPath(value);
-  if (!normalized) {
-    throw new Error(`${label} cannot be empty`);
-  }
-  if (path.isAbsolute(normalized)) {
-    throw new Error(`${label} must be relative to root`);
-  }
-  if (hasParentTraversal(normalized)) {
-    throw new Error(`${label} must not escape root`);
-  }
-  return normalized.replace(/^\.\/+/u, "");
-}
-
-export function normalizeRelativePathList(
-  values: unknown,
-  label: string,
-  normalizer: (value: string, entryLabel: string) => string = normalizeRelativePathInput,
-): string[] {
-  if (values === undefined) {
-    return [];
-  }
-  if (!Array.isArray(values)) {
-    throw new Error(`${label} must be an array of strings`);
-  }
-  const result = new Set<string>();
-  for (const entry of values) {
-    if (typeof entry !== "string") {
-      throw new Error(`${label} must be an array of strings`);
-    }
-    result.add(normalizer(entry, label));
-  }
-  return Array.from(result);
-}
-
-export function isPathWithinFilters(relativePath: string, filters: string[]): boolean {
-  if (filters.length === 0) {
-    return true;
-  }
-  return filters.some((filter) => {
-    if (filter === ".") {
-      return true;
-    }
-    return relativePath === filter || relativePath.startsWith(`${filter}/`);
-  });
 }
 
 export function isPathWithinRoot(rootReal: string, targetReal: string): boolean {
@@ -90,6 +19,22 @@ export function isPathWithinRoot(rootReal: string, targetReal: string): boolean 
     relativeToRoot.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relativeToRoot)
   );
+}
+
+export function createRealpathChecker(rootReal: string): (absolutePath: string) => Promise<boolean> {
+  const cache = new Map<string, Promise<boolean>>();
+  return (absolutePath: string) => {
+    const existing = cache.get(absolutePath);
+    if (existing) {
+      return existing;
+    }
+    const check = fs
+      .realpath(absolutePath)
+      .then((realPath) => isPathWithinRoot(rootReal, realPath))
+      .catch(() => false);
+    cache.set(absolutePath, check);
+    return check;
+  };
 }
 
 export async function resolveValidatedRoot(

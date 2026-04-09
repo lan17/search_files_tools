@@ -1,44 +1,62 @@
+import picomatch from "picomatch";
 import { Type } from "@sinclair/typebox";
-import { enumerateFiles } from "./file-enumerator.ts";
 import type { SearchFilesPluginConfig } from "./config.ts";
-import {
-  normalizeGlobInput,
-  normalizeRelativePathList,
-  resolveValidatedRoot,
-} from "./path-utils.ts";
+import { toPosixRelativePath, resolveValidatedRoot, createRealpathChecker } from "./path-utils.ts";
+import { runRipgrepGlob } from "./search-backend.ts";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "./runtime-api.ts";
 
 const FilesGlobSchema = Type.Object(
   {
-    root: Type.String({ description: "Absolute directory under which globbing is performed." }),
+    root: Type.String({ description: "Absolute directory to list files in." }),
     patterns: Type.Array(Type.String(), {
-      description: "One or more glob patterns relative to root.",
+      description: 'Glob patterns to match (e.g., ["*.ts", "src/**"]). Uses gitignore-style matching where "*.ts" matches at any depth.',
       minItems: 1,
     }),
-    paths: Type.Optional(
-      Type.Array(Type.String(), {
-        description: "Optional relative subpaths under root used to narrow returned files.",
-      }),
-    ),
     excludeGlobs: Type.Optional(
       Type.Array(Type.String(), {
-        description: "Optional glob patterns to exclude, relative to root.",
+        description: "Glob patterns to exclude.",
       }),
     ),
-    includeHidden: Type.Optional(Type.Boolean({ description: "Include dotfiles and dot-directories." })),
-    respectIgnoreFiles: Type.Optional(
-      Type.Boolean({ description: "Respect .gitignore and related ignore files when enumerating." }),
+    includeHidden: Type.Optional(
+      Type.Boolean({ description: "Include dotfiles and dot-directories." }),
     ),
-    followSymlinks: Type.Optional(Type.Boolean({ description: "Follow symbolic links while globbing." })),
+    followSymlinks: Type.Optional(Type.Boolean({ description: "Follow symbolic links." })),
     maxResults: Type.Optional(
       Type.Integer({
-        description: "Optional per-call result cap. Defaults to the plugin maxGlobResults limit.",
+        description: "Result cap. Defaults to the plugin maxGlobResults limit.",
         minimum: 1,
       }),
     ),
   },
   { additionalProperties: false },
 );
+
+function readGlobPatterns(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("patterns is required and must be a non-empty array");
+  }
+  for (const entry of value) {
+    if (typeof entry !== "string" || !entry.trim()) {
+      throw new Error("each glob pattern must be a non-empty string");
+    }
+  }
+  return value as string[];
+}
+
+function readStringArray(value: unknown, label: string): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array of strings`);
+  }
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      throw new Error(`${label} entries must be strings`);
+    }
+  }
+  return value as string[];
+}
 
 function resolveMaxResults(rawValue: unknown, configuredCap: number): number {
   if (rawValue === undefined) {
@@ -57,39 +75,50 @@ export function createFilesGlobTool(params: {
   return {
     name: "files_glob",
     label: "Files Glob",
-    description: "List files matching glob patterns under an absolute root directory.",
+    description:
+      "List files matching glob patterns. Returns file paths relative to root. Respects .gitignore by default.",
     parameters: FilesGlobSchema,
     execute: async (_toolCallId, rawParams, signal) => {
       const root = await resolveValidatedRoot(rawParams.root, params.context);
-      const patterns = normalizeRelativePathList(rawParams.patterns, "patterns", normalizeGlobInput);
-      if (patterns.length === 0) {
-        throw new Error("patterns is required");
-      }
-      const pathFilters = normalizeRelativePathList(rawParams.paths, "paths");
-      const excludeGlobs = normalizeRelativePathList(
-        rawParams.excludeGlobs,
-        "excludeGlobs",
-        normalizeGlobInput,
-      );
+      const patterns = readGlobPatterns(rawParams.patterns);
+      const excludeGlobs = readStringArray(rawParams.excludeGlobs, "excludeGlobs");
       const maxResults = resolveMaxResults(rawParams.maxResults, params.config.maxGlobResults);
+      const followSymlinks = rawParams.followSymlinks === true;
 
-      const enumerated = await enumerateFiles({
-        rootReal: root.rootReal,
-        patterns,
-        pathFilters,
+      const result = await runRipgrepGlob({
+        root: root.rootReal,
         excludeGlobs,
         includeHidden: rawParams.includeHidden === true,
-        respectIgnoreFiles: rawParams.respectIgnoreFiles === true,
-        followSymlinks: rawParams.followSymlinks === true,
+        followSymlinks,
         maxResults,
+        timeoutMs: params.config.timeoutMs,
         signal,
       });
 
+      // Post-filter include patterns (not passed to rg, which would override gitignore)
+      const isIncluded = picomatch(patterns, { dot: rawParams.includeHidden === true });
+      let files = result.files.filter((f) =>
+        isIncluded(toPosixRelativePath(root.rootReal, f)),
+      );
+      if (followSymlinks) {
+        const checker = createRealpathChecker(root.rootReal);
+        const allowed: string[] = [];
+        for (const f of files) {
+          if (await checker(f)) {
+            allowed.push(f);
+          }
+        }
+        files = allowed;
+      }
+
+      // Convert to relative paths
+      const relativePaths = files.map((f) => toPosixRelativePath(root.rootReal, f));
+
       const payload = {
         root: root.rootReal,
-        truncated: enumerated.truncated,
-        count: enumerated.files.length,
-        files: enumerated.files.map((entry) => entry.relativePath),
+        truncated: result.truncated,
+        count: relativePaths.length,
+        files: relativePaths,
       };
 
       return {

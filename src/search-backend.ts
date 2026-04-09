@@ -1,45 +1,65 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
 
-export type SearchBackendName = "rg" | "grep";
+// ─── Types ────────────────────────────────────────────────────────────────
 
-export type SearchBackend = {
-  name: SearchBackendName;
-  command: string;
-};
+export type MatchMode = "regex" | "fixed" | "word" | "line";
+export type OutputMode = "matches" | "files" | "counts";
 
-export type SearchMode = "matches" | "files" | "counts";
+export type ContextLine = { line: number; text: string };
 
-export type SearchBackendMatch = {
+export type RawSearchMatch = {
   absolutePath: string;
   line: number;
   text: string;
+  before?: ContextLine[];
+  after?: ContextLine[];
 };
 
-export type SearchBackendRunParams = {
-  backend: SearchBackend;
-  files: string[];
-  patterns: string[];
-  fixedStrings?: boolean;
-  ignoreCase?: boolean;
-  wordMatch?: boolean;
-  lineMatch?: boolean;
-  maxMatchesPerFile?: number;
-  timeoutMs: number;
-  resultLimit: number;
-  mode: SearchMode;
-  signal?: AbortSignal;
-};
-
-export type SearchBackendResult = {
-  backend: SearchBackendName;
+export type SearchResult = {
   truncated: boolean;
-  matches: SearchBackendMatch[];
+  matches: RawSearchMatch[];
   files: string[];
   counts: Array<{ absolutePath: string; count: number }>;
 };
+
+export type SearchParams = {
+  root: string;
+  patterns: string[];
+  matchMode: MatchMode;
+  outputMode: OutputMode;
+  excludeGlobs: string[];
+  ignoreCase: boolean;
+  includeHidden: boolean;
+  followSymlinks: boolean;
+  beforeContext: number;
+  afterContext: number;
+  maxMatchesPerFile?: number;
+  timeoutMs: number;
+  resultLimit: number;
+  signal?: AbortSignal;
+};
+
+export type GlobParams = {
+  root: string;
+  excludeGlobs: string[];
+  includeHidden: boolean;
+  followSymlinks: boolean;
+  maxResults: number;
+  timeoutMs: number;
+  signal?: AbortSignal;
+};
+
+export type GlobResult = {
+  files: string[];
+  truncated: boolean;
+};
+
+// ─── Constants ────────────────────────────────────────────────────────────
+
+export const MAX_STDERR_BYTES = 64 * 1024;
+
+// ─── Low-level process runner ─────────────────────────────────────────────
 
 type LineRunnerParams = {
   command: string;
@@ -48,128 +68,6 @@ type LineRunnerParams = {
   onLine: (line: string, stop: () => void) => void;
   signal?: AbortSignal;
 };
-
-const MAX_BATCH_ARG_CHARS = 120_000;
-export const MAX_STDERR_BYTES = 64 * 1024;
-const executableCache = new Map<string, Promise<SearchBackend>>();
-
-function decodeRipgrepText(
-  value: { text?: string; bytes?: string } | undefined,
-): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  if (typeof value.text === "string") {
-    return value.text;
-  }
-  if (typeof value.bytes === "string") {
-    return Buffer.from(value.bytes, "base64").toString("utf8");
-  }
-  return undefined;
-}
-
-async function findExecutable(name: string, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
-  const pathEnv = env.PATH;
-  if (!pathEnv) {
-    return null;
-  }
-  const pathEntries = pathEnv.split(path.delimiter).filter(Boolean);
-  const suffixes =
-    process.platform === "win32"
-      ? (env.PATHEXT?.split(path.delimiter).filter(Boolean) ?? [".EXE", ".CMD", ".BAT", ".COM"])
-      : [""];
-
-  for (const entry of pathEntries) {
-    for (const suffix of suffixes) {
-      const candidate = path.join(entry, process.platform === "win32" ? `${name}${suffix}` : name);
-      try {
-        await fs.access(candidate, fs.constants.X_OK);
-        return candidate;
-      } catch {
-        // Keep scanning PATH.
-      }
-    }
-  }
-
-  return null;
-}
-
-export function clearSearchBackendCache(): void {
-  executableCache.clear();
-}
-
-export async function resolveSearchBackend(): Promise<SearchBackend> {
-  const cached = executableCache.get("default");
-  if (cached) {
-    return await cached;
-  }
-  const resolution = (async () => {
-    const rg = await findExecutable("rg");
-    if (rg) {
-      return { name: "rg", command: rg } satisfies SearchBackend;
-    }
-    const grep = await findExecutable("grep");
-    if (grep) {
-      return { name: "grep", command: grep } satisfies SearchBackend;
-    }
-    throw new Error("files_search requires either rg or grep to be installed");
-  })();
-  executableCache.set("default", resolution);
-  return await resolution;
-}
-
-function buildSearchArgs(params: SearchBackendRunParams): string[] {
-  const args: string[] = [];
-  if (params.backend.name === "rg") {
-    args.push("--json", "-n", "-H", "--no-heading", "--color", "never");
-  } else {
-    args.push("-nH", "-Z", "--binary-files=without-match");
-  }
-
-  if (params.fixedStrings === true) {
-    args.push("-F");
-  }
-  if (params.ignoreCase === true) {
-    args.push("-i");
-  }
-  if (params.wordMatch === true) {
-    args.push("-w");
-  }
-  if (params.lineMatch === true) {
-    args.push("-x");
-  }
-  if (typeof params.maxMatchesPerFile === "number") {
-    args.push("-m", String(params.maxMatchesPerFile));
-  }
-  for (const pattern of params.patterns) {
-    args.push("-e", pattern);
-  }
-  args.push("--");
-  return args;
-}
-
-function createFileBatches(files: string[]): string[][] {
-  const batches: string[][] = [];
-  let currentBatch: string[] = [];
-  let currentChars = 0;
-
-  for (const file of files) {
-    const fileChars = file.length + 1;
-    if (currentBatch.length > 0 && currentChars + fileChars > MAX_BATCH_ARG_CHARS) {
-      batches.push(currentBatch);
-      currentBatch = [];
-      currentChars = 0;
-    }
-    currentBatch.push(file);
-    currentChars += fileChars;
-  }
-
-  if (currentBatch.length > 0) {
-    batches.push(currentBatch);
-  }
-
-  return batches;
-}
 
 export async function runLineCommand(params: LineRunnerParams): Promise<{
   exitCode: number | null;
@@ -211,17 +109,13 @@ export async function runLineCommand(params: LineRunnerParams): Promise<{
       stderrTruncated = true;
       return;
     }
-
     const remainingBytes = MAX_STDERR_BYTES - stderrBytes;
     if (buffer.length > remainingBytes) {
-      // This truncates on a byte boundary, which can split a UTF-8 codepoint, but stderr
-      // here is only diagnostic output and the hard memory cap matters more than perfect decoding.
       stderrChunks.push(buffer.subarray(0, remainingBytes));
       stderrBytes += remainingBytes;
       stderrTruncated = true;
       return;
     }
-
     stderrChunks.push(buffer);
     stderrBytes += buffer.length;
   });
@@ -231,8 +125,16 @@ export async function runLineCommand(params: LineRunnerParams): Promise<{
     crlfDelay: Number.POSITIVE_INFINITY,
   });
 
-  const closePromise = new Promise<number | null>((resolve, reject) => {
-    child.once("error", reject);
+  let spawnError: Error | null = null;
+  child.once("error", (err) => {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      spawnError = new Error(`command not found: ${params.command}`);
+    } else {
+      spawnError = err;
+    }
+  });
+
+  const closePromise = new Promise<number | null>((resolve) => {
     child.once("close", (code) => resolve(code));
   });
 
@@ -254,6 +156,9 @@ export async function runLineCommand(params: LineRunnerParams): Promise<{
     params.signal?.removeEventListener("abort", abortListener);
   }
 
+  if (spawnError) {
+    throw spawnError;
+  }
   if (timedOut) {
     throw new Error(`search process timed out after ${params.timeoutMs}ms`);
   }
@@ -264,151 +169,288 @@ export async function runLineCommand(params: LineRunnerParams): Promise<{
   const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
   return {
     exitCode,
-    stderr: `${stderr}${
-      stderrTruncated ? `${stderr ? "\n" : ""}[stderr truncated]` : ""
-    }`,
+    stderr: `${stderr}${stderrTruncated ? `${stderr ? "\n" : ""}[stderr truncated]` : ""}`,
     stoppedEarly,
   };
+}
+
+// ─── Ripgrep JSON parsing ─────────────────────────────────────────────────
+
+type RipgrepTextValue = { text?: string; bytes?: string };
+
+type RipgrepJsonEntry = {
+  type: string;
+  data?: {
+    path?: RipgrepTextValue;
+    line_number?: number;
+    lines?: RipgrepTextValue;
+  };
+};
+
+function decodeRipgrepText(value: RipgrepTextValue | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (typeof value.text === "string") {
+    return value.text;
+  }
+  if (typeof value.bytes === "string") {
+    return Buffer.from(value.bytes, "base64").toString("utf8");
+  }
+  return undefined;
 }
 
 function trimTrailingNewline(value: string): string {
   return value.replace(/\r?\n$/u, "");
 }
 
-export function parseRipgrepMatchLine(line: string): SearchBackendMatch | null {
+export function parseRipgrepJsonLine(line: string): RipgrepJsonEntry | null {
   if (!line.trim()) {
     return null;
   }
-  let payload: {
-    type?: string;
-    data?: {
-      path?: { text?: string; bytes?: string };
-      line_number?: number;
-      lines?: { text?: string; bytes?: string };
-    };
-  };
   try {
-    payload = JSON.parse(line) as {
-      type?: string;
-      data?: {
-        path?: { text?: string; bytes?: string };
-        line_number?: number;
-        lines?: { text?: string; bytes?: string };
-      };
-    };
+    return JSON.parse(line) as RipgrepJsonEntry;
   } catch {
     return null;
   }
-  if (payload.type !== "match") {
-    return null;
-  }
-  const absolutePath = decodeRipgrepText(payload.data?.path);
-  const text = trimTrailingNewline(decodeRipgrepText(payload.data?.lines) ?? "");
-  const lineNumber = payload.data?.line_number;
-  if (!absolutePath || typeof lineNumber !== "number") {
-    return null;
-  }
-  return {
-    absolutePath,
-    line: lineNumber,
-    text,
-  };
 }
 
-function parseGrepMatchLine(line: string): SearchBackendMatch | null {
-  if (!line.trim()) {
-    return null;
+// ─── Search (rg --json) ──────────────────────────────────────────────────
+
+function buildSearchArgs(params: SearchParams): string[] {
+  const args: string[] = ["--json", "-n", "--no-heading", "--color", "never"];
+
+  switch (params.matchMode) {
+    case "fixed":
+      args.push("--fixed-strings");
+      break;
+    case "word":
+      args.push("--word-regexp");
+      break;
+    case "line":
+      args.push("--line-regexp");
+      break;
   }
-  const nulIndex = line.indexOf("\u0000");
-  if (nulIndex === -1) {
-    return null;
+
+  if (params.ignoreCase) {
+    args.push("--ignore-case");
   }
-  const absolutePath = line.slice(0, nulIndex);
-  const rest = line.slice(nulIndex + 1);
-  const match = /^([0-9]+):(.*)$/u.exec(rest);
-  if (!match) {
-    return null;
+  if (params.includeHidden) {
+    args.push("--hidden");
   }
-  return {
-    absolutePath,
-    line: Number(match[1]),
-    text: match[2],
-  };
+  if (params.followSymlinks) {
+    args.push("--follow");
+  }
+
+  if (params.outputMode === "matches") {
+    if (params.beforeContext > 0) {
+      args.push("-B", String(params.beforeContext));
+    }
+    if (params.afterContext > 0) {
+      args.push("-A", String(params.afterContext));
+    }
+  }
+
+  if (params.maxMatchesPerFile !== undefined) {
+    args.push("-m", String(params.maxMatchesPerFile));
+  }
+
+  // Only pass excludes to rg (additive with gitignore).
+  // Include globs are applied as a post-filter so they don't override gitignore.
+  for (const glob of params.excludeGlobs) {
+    args.push("--glob", `!${glob}`);
+  }
+
+  for (const pattern of params.patterns) {
+    args.push("-e", pattern);
+  }
+  args.push("--", params.root);
+
+  return args;
 }
 
-export async function runSearchWithBackend(
-  params: SearchBackendRunParams,
-): Promise<SearchBackendResult> {
-  const matches: SearchBackendMatch[] = [];
+export async function runRipgrepSearch(params: SearchParams): Promise<SearchResult> {
+  const matches: RawSearchMatch[] = [];
   const fileSet = new Set<string>();
   const countMap = new Map<string, number>();
   let truncated = false;
 
-  const parser = params.backend.name === "rg" ? parseRipgrepMatchLine : parseGrepMatchLine;
-  const baseArgs = buildSearchArgs(params);
-  const batches = createFileBatches(params.files);
+  const useContext =
+    params.outputMode === "matches" && (params.beforeContext > 0 || params.afterContext > 0);
+  let beforeBuffer: ContextLine[] = [];
+  let pendingMatch: RawSearchMatch | null = null;
+  let afterRemaining = 0;
 
-  for (const batch of batches) {
-    const { exitCode, stderr, stoppedEarly } = await runLineCommand({
-      command: params.backend.command,
-      args: [...baseArgs, ...batch],
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-      onLine: (line, stop) => {
-        const parsed = parser(line);
-        if (!parsed) {
+  const flushPendingMatch = () => {
+    if (pendingMatch) {
+      matches.push(pendingMatch);
+      pendingMatch = null;
+      afterRemaining = 0;
+    }
+  };
+
+  const { exitCode, stderr, stoppedEarly } = await runLineCommand({
+    command: "rg",
+    args: buildSearchArgs(params),
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+    onLine: (line, stop) => {
+      const entry = parseRipgrepJsonLine(line);
+      if (!entry) {
+        return;
+      }
+
+      if (entry.type === "match") {
+        const absolutePath = decodeRipgrepText(entry.data?.path);
+        const text = trimTrailingNewline(decodeRipgrepText(entry.data?.lines) ?? "");
+        const lineNumber = entry.data?.line_number;
+        if (!absolutePath || typeof lineNumber !== "number") {
           return;
         }
 
-        if (params.mode === "matches") {
-          matches.push(parsed);
-          if (matches.length >= params.resultLimit) {
-            truncated = true;
-            stop();
+        if (params.outputMode === "matches") {
+          if (useContext) {
+            flushPendingMatch();
+            if (matches.length >= params.resultLimit) {
+              truncated = true;
+              stop();
+              return;
+            }
+            pendingMatch = {
+              absolutePath,
+              line: lineNumber,
+              text,
+              ...(beforeBuffer.length > 0 ? { before: [...beforeBuffer] } : {}),
+            };
+            afterRemaining = params.afterContext;
+            beforeBuffer = [];
+          } else {
+            matches.push({ absolutePath, line: lineNumber, text });
+            if (matches.length >= params.resultLimit) {
+              truncated = true;
+              stop();
+            }
           }
           return;
         }
 
-        if (params.mode === "files") {
-          if (!fileSet.has(parsed.absolutePath) && fileSet.size >= params.resultLimit) {
+        if (params.outputMode === "files") {
+          if (!fileSet.has(absolutePath) && fileSet.size >= params.resultLimit) {
             truncated = true;
             stop();
             return;
           }
-          fileSet.add(parsed.absolutePath);
+          fileSet.add(absolutePath);
           return;
         }
 
-        if (!countMap.has(parsed.absolutePath) && countMap.size >= params.resultLimit) {
+        // counts mode
+        if (!countMap.has(absolutePath) && countMap.size >= params.resultLimit) {
           truncated = true;
           stop();
           return;
         }
-        countMap.set(parsed.absolutePath, (countMap.get(parsed.absolutePath) ?? 0) + 1);
-      },
-    });
+        countMap.set(absolutePath, (countMap.get(absolutePath) ?? 0) + 1);
+        return;
+      }
 
-    if (exitCode !== 0 && exitCode !== 1 && !stoppedEarly) {
-      const backendLabel = params.backend.name;
-      throw new Error(stderr || `${backendLabel} exited with code ${String(exitCode)}`);
-    }
+      if (entry.type === "context" && useContext) {
+        const lineNumber = entry.data?.line_number;
+        const text = trimTrailingNewline(decodeRipgrepText(entry.data?.lines) ?? "");
+        if (typeof lineNumber !== "number") {
+          return;
+        }
 
-    if (stoppedEarly) {
-      truncated = true;
-      break;
-    }
+        const contextLine: ContextLine = { line: lineNumber, text };
+
+        if (pendingMatch && afterRemaining > 0) {
+          if (!pendingMatch.after) {
+            pendingMatch.after = [];
+          }
+          pendingMatch.after.push(contextLine);
+          afterRemaining--;
+        }
+
+        beforeBuffer.push(contextLine);
+        if (beforeBuffer.length > params.beforeContext) {
+          beforeBuffer.shift();
+        }
+        return;
+      }
+
+      if (entry.type === "begin" || entry.type === "end") {
+        if (useContext) {
+          flushPendingMatch();
+          beforeBuffer = [];
+        }
+      }
+    },
+  });
+
+  if (useContext) {
+    flushPendingMatch();
   }
 
-  const files = Array.from(fileSet).sort((left, right) => left.localeCompare(right, "en"));
+  if (exitCode !== 0 && exitCode !== 1 && !stoppedEarly) {
+    throw new Error(stderr || `rg exited with code ${String(exitCode)}`);
+  }
+
+  const files = Array.from(fileSet).sort((a, b) => a.localeCompare(b, "en"));
   const counts = Array.from(countMap.entries())
     .map(([absolutePath, count]) => ({ absolutePath, count }))
-    .sort((left, right) => left.absolutePath.localeCompare(right.absolutePath, "en"));
+    .sort((a, b) => a.absolutePath.localeCompare(b.absolutePath, "en"));
 
-  return {
-    backend: params.backend.name,
-    truncated,
-    matches,
-    files,
-    counts,
-  };
+  return { truncated, matches, files, counts };
+}
+
+// ─── Glob (rg --files) ───────────────────────────────────────────────────
+
+function buildGlobArgs(params: GlobParams): string[] {
+  const args: string[] = ["--files"];
+
+  if (params.includeHidden) {
+    args.push("--hidden");
+  }
+  if (params.followSymlinks) {
+    args.push("--follow");
+  }
+
+  // Only pass excludes to rg. Include patterns are post-filtered.
+  for (const glob of params.excludeGlobs) {
+    args.push("--glob", `!${glob}`);
+  }
+
+  args.push("--", params.root);
+
+  return args;
+}
+
+export async function runRipgrepGlob(params: GlobParams): Promise<GlobResult> {
+  const files: string[] = [];
+  let truncated = false;
+
+  const { exitCode, stderr, stoppedEarly } = await runLineCommand({
+    command: "rg",
+    args: buildGlobArgs(params),
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+    onLine: (line, stop) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return;
+      }
+      if (files.length >= params.maxResults) {
+        truncated = true;
+        stop();
+        return;
+      }
+      files.push(trimmed);
+    },
+  });
+
+  if (exitCode !== 0 && exitCode !== 1 && !stoppedEarly) {
+    throw new Error(stderr || `rg exited with code ${String(exitCode)}`);
+  }
+
+  return { files: files.sort((a, b) => a.localeCompare(b, "en")), truncated };
 }
