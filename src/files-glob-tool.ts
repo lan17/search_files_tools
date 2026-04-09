@@ -7,13 +7,12 @@ import type { AnyAgentTool, OpenClawPluginToolContext } from "./runtime-api.ts";
 const FilesGlobSchema = Type.Object(
   {
     root: Type.String({ description: "Absolute directory to list files in." }),
-    patterns: Type.Array(Type.String(), {
-      description: 'Glob patterns to match (e.g., ["*.ts", "src/**"]). Uses gitignore-style matching where "*.ts" matches at any depth.',
-      minItems: 1,
+    patterns: Type.Union([Type.String(), Type.Array(Type.String(), { minItems: 1 })], {
+      description: 'One or more glob patterns. Pass a string (e.g., "*.ts") or an array (e.g., ["*.ts", "src/**"]). Patterns like "*.ts" match at any depth.',
     }),
-    excludeGlobs: Type.Optional(
-      Type.Array(Type.String(), {
-        description: "Glob patterns to exclude.",
+    exclude: Type.Optional(
+      Type.Union([Type.String(), Type.Array(Type.String())], {
+        description: 'Glob patterns to exclude (e.g., "*.test.ts" or ["dist/**", "*.min.js"]).',
       }),
     ),
     includeHidden: Type.Optional(
@@ -30,28 +29,38 @@ const FilesGlobSchema = Type.Object(
   { additionalProperties: false },
 );
 
-function readGlobPatterns(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new Error("patterns is required and must be a non-empty array");
+/** Accept a string, an array of strings, or undefined. Always return a string[]. */
+function readStringOrArray(value: unknown, label: string): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (typeof value === "string") {
+    return value.trim() ? [value] : [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be a string or array of strings`);
   }
   for (const entry of value) {
-    if (typeof entry !== "string" || !entry.trim()) {
-      throw new Error("each glob pattern must be a non-empty string");
+    if (typeof entry !== "string") {
+      throw new Error(`${label} entries must be strings`);
     }
   }
   return value as string[];
 }
 
-function readStringArray(value: unknown, label: string): string[] {
-  if (value === undefined) {
-    return [];
+function readGlobPatterns(value: unknown): string[] {
+  if (typeof value === "string") {
+    if (!value.trim()) {
+      throw new Error("patterns must be a non-empty string or array");
+    }
+    return [value];
   }
-  if (!Array.isArray(value)) {
-    throw new Error(`${label} must be an array of strings`);
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("patterns is required");
   }
   for (const entry of value) {
-    if (typeof entry !== "string") {
-      throw new Error(`${label} entries must be strings`);
+    if (typeof entry !== "string" || !entry.trim()) {
+      throw new Error("each glob pattern must be a non-empty string");
     }
   }
   return value as string[];
@@ -75,12 +84,12 @@ export function createFilesGlobTool(params: {
     name: "files_glob",
     label: "Files Glob",
     description:
-      "List files matching glob patterns. Returns file paths relative to root. Respects .gitignore by default.",
+      "Find files by name or path pattern. Use this to discover what files exist, find files by extension (e.g., \"*.py\"), or list a directory's contents. Returns file paths relative to root. Respects .gitignore by default.",
     parameters: FilesGlobSchema,
     execute: async (_toolCallId, rawParams, signal) => {
       const root = await resolveValidatedRoot(rawParams.root, params.context);
       const patterns = readGlobPatterns(rawParams.patterns);
-      const excludeGlobs = readStringArray(rawParams.excludeGlobs, "excludeGlobs");
+      const exclude = readStringOrArray(rawParams.exclude, "exclude");
       const maxResults = resolveMaxResults(rawParams.maxResults, params.config.maxGlobResults);
       const followSymlinks = rawParams.followSymlinks === true;
 
@@ -91,7 +100,7 @@ export function createFilesGlobTool(params: {
 
       const result = await runRipgrepGlob({
         root: root.rootReal,
-        excludeGlobs,
+        excludeGlobs: exclude,
         includeHidden: rawParams.includeHidden === true,
         followSymlinks,
         maxResults,

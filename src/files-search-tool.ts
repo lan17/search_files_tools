@@ -9,12 +9,13 @@ import {
 } from "./search-backend.ts";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "./runtime-api.ts";
 
+const DEFAULT_CONTEXT_LINES = 2;
+
 const FilesSearchSchema = Type.Object(
   {
     root: Type.String({ description: "Absolute directory to search." }),
-    patterns: Type.Array(Type.String(), {
-      description: "Search patterns (regex by default). At least one required.",
-      minItems: 1,
+    patterns: Type.Union([Type.String(), Type.Array(Type.String(), { minItems: 1 })], {
+      description: 'One or more search patterns (regex by default). Pass a string for a single pattern or an array for multiple.',
     }),
     matchMode: Type.Optional(
       Type.Union(
@@ -25,25 +26,25 @@ const FilesSearchSchema = Type.Object(
     outputMode: Type.Optional(
       Type.Union(
         [Type.Literal("matches"), Type.Literal("files"), Type.Literal("counts")],
-        { description: 'What to return. "matches" (default) returns matching lines, "files" returns file paths, "counts" returns per-file match counts.' },
+        { description: 'What to return. "matches" (default) returns matching lines with context, "files" returns just file paths, "counts" returns per-file match counts.' },
       ),
     ),
-    includeGlobs: Type.Optional(
-      Type.Array(Type.String(), {
-        description: 'Glob patterns to restrict which files are searched (e.g., ["*.ts", "src/**"]). Uses gitignore-style matching.',
+    include: Type.Optional(
+      Type.Union([Type.String(), Type.Array(Type.String())], {
+        description: 'Restrict which files are searched. A string or array of glob patterns (e.g., "*.ts" or ["*.ts", "src/**"]).',
       }),
     ),
-    excludeGlobs: Type.Optional(
-      Type.Array(Type.String(), {
-        description: 'Glob patterns to exclude from search (e.g., ["*.test.ts"]).',
+    exclude: Type.Optional(
+      Type.Union([Type.String(), Type.Array(Type.String())], {
+        description: 'Exclude files from search. A string or array of glob patterns (e.g., "*.test.ts").',
       }),
     ),
     ignoreCase: Type.Optional(Type.Boolean({ description: "Match case-insensitively." })),
     beforeContext: Type.Optional(
-      Type.Integer({ description: "Context lines before each match.", minimum: 0 }),
+      Type.Integer({ description: `Context lines before each match. Default: ${DEFAULT_CONTEXT_LINES}.`, minimum: 0 }),
     ),
     afterContext: Type.Optional(
-      Type.Integer({ description: "Context lines after each match.", minimum: 0 }),
+      Type.Integer({ description: `Context lines after each match. Default: ${DEFAULT_CONTEXT_LINES}.`, minimum: 0 }),
     ),
     maxMatchesPerFile: Type.Optional(
       Type.Integer({ description: "Max matches to return per file.", minimum: 1 }),
@@ -56,9 +57,9 @@ const FilesSearchSchema = Type.Object(
   { additionalProperties: false },
 );
 
-function readNonNegativeInteger(value: unknown, label: string): number {
+function readNonNegativeInteger(value: unknown, label: string, fallback: number): number {
   if (value === undefined) {
-    return 0;
+    return fallback;
   }
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     throw new Error(`${label} must be a non-negative integer`);
@@ -76,12 +77,16 @@ function readOptionalPositiveInteger(value: unknown, label: string): number | un
   return value;
 }
 
-function readStringArray(value: unknown, label: string): string[] {
+/** Accept a string, an array of strings, or undefined. Always return a string[]. */
+function readStringOrArray(value: unknown, label: string): string[] {
   if (value === undefined) {
     return [];
   }
+  if (typeof value === "string") {
+    return value.trim() ? [value] : [];
+  }
   if (!Array.isArray(value)) {
-    throw new Error(`${label} must be an array of strings`);
+    throw new Error(`${label} must be a string or array of strings`);
   }
   for (const entry of value) {
     if (typeof entry !== "string") {
@@ -92,8 +97,14 @@ function readStringArray(value: unknown, label: string): string[] {
 }
 
 function readPatterns(value: unknown): string[] {
+  if (typeof value === "string") {
+    if (!value.trim()) {
+      throw new Error("patterns must be a non-empty string or array");
+    }
+    return [value];
+  }
   if (!Array.isArray(value) || value.length === 0) {
-    throw new Error("patterns is required and must be a non-empty array");
+    throw new Error("patterns is required");
   }
   for (const entry of value) {
     if (typeof entry !== "string" || !entry.trim()) {
@@ -159,17 +170,25 @@ export function createFilesSearchTool(params: {
     name: "files_search",
     label: "Files Search",
     description:
-      "Search for text patterns inside file contents. Returns matching lines with file paths and line numbers. Respects .gitignore by default.",
+      "Search for a function, variable, string, or regex pattern in file contents. Use this to find where something is defined, imported, or referenced. Returns matching lines with surrounding context. Respects .gitignore by default.",
     parameters: FilesSearchSchema,
     execute: async (_toolCallId, rawParams, signal) => {
       const root = await resolveValidatedRoot(rawParams.root, params.context);
       const patterns = readPatterns(rawParams.patterns);
       const matchMode = readMatchMode(rawParams.matchMode);
       const outputMode = readOutputMode(rawParams.outputMode);
-      const includeGlobs = readStringArray(rawParams.includeGlobs, "includeGlobs");
-      const excludeGlobs = readStringArray(rawParams.excludeGlobs, "excludeGlobs");
-      const beforeContext = readNonNegativeInteger(rawParams.beforeContext, "beforeContext");
-      const afterContext = readNonNegativeInteger(rawParams.afterContext, "afterContext");
+      const include = readStringOrArray(rawParams.include, "include");
+      const exclude = readStringOrArray(rawParams.exclude, "exclude");
+      const beforeContext = readNonNegativeInteger(
+        rawParams.beforeContext,
+        "beforeContext",
+        outputMode === "matches" ? DEFAULT_CONTEXT_LINES : 0,
+      );
+      const afterContext = readNonNegativeInteger(
+        rawParams.afterContext,
+        "afterContext",
+        outputMode === "matches" ? DEFAULT_CONTEXT_LINES : 0,
+      );
       const maxMatchesPerFile = readOptionalPositiveInteger(
         rawParams.maxMatchesPerFile,
         "maxMatchesPerFile",
@@ -178,8 +197,8 @@ export function createFilesSearchTool(params: {
 
       // Build path filter: include globs applied at streaming level so limits are correct
       let pathFilter: ((absolutePath: string) => boolean) | undefined;
-      if (includeGlobs.length > 0) {
-        const isIncluded = createGlobMatcher(includeGlobs, {
+      if (include.length > 0) {
+        const isIncluded = createGlobMatcher(include, {
           dot: rawParams.includeHidden === true,
         });
         pathFilter = (absolutePath: string) =>
@@ -191,7 +210,7 @@ export function createFilesSearchTool(params: {
         patterns,
         matchMode,
         outputMode,
-        excludeGlobs,
+        excludeGlobs: exclude,
         ignoreCase: rawParams.ignoreCase === true,
         includeHidden: rawParams.includeHidden === true,
         followSymlinks,

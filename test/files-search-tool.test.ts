@@ -22,6 +22,10 @@ describe("files_search", () => {
       ).rejects.toThrow("patterns is required");
 
       await expect(
+        tool.execute("call", { root, patterns: "", }),
+      ).rejects.toThrow("patterns must be a non-empty string");
+
+      await expect(
         tool.execute("call", { root, patterns: ["x"], matchMode: "bogus" }),
       ).rejects.toThrow("matchMode must be one of");
 
@@ -45,7 +49,32 @@ describe("files_search", () => {
     }
   });
 
-  it("returns matches with include/exclude globs and context", async () => {
+  it("accepts a bare string for patterns and include/exclude", async () => {
+    const root = await createTempDir();
+    try {
+      await writeFiles(root, {
+        "src/app.ts": "needle\n",
+        "other.js": "needle\n",
+      });
+
+      const tool = createFilesSearchTool({ config: DEFAULT_PLUGIN_CONFIG });
+      const result = await tool.execute("call", {
+        root,
+        patterns: "needle",
+        include: "*.ts",
+        beforeContext: 0,
+        afterContext: 0,
+      });
+      const details = result.details as {
+        matches: Array<{ path: string }>;
+      };
+      expect(details.matches.map((m) => m.path)).toEqual(["src/app.ts"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns matches with include/exclude and context", async () => {
     const root = await createTempDir();
     try {
       await writeFiles(root, {
@@ -59,8 +88,8 @@ describe("files_search", () => {
       const result = await tool.execute("call", {
         root,
         patterns: ["needle"],
-        includeGlobs: ["src/**/*.ts"],
-        excludeGlobs: ["*.test.ts"],
+        include: ["src/**/*.ts"],
+        exclude: ["*.test.ts"],
         beforeContext: 1,
         afterContext: 1,
       });
@@ -97,6 +126,37 @@ describe("files_search", () => {
     }
   });
 
+  it("defaults to 2 lines of context in matches mode", async () => {
+    const root = await createTempDir();
+    try {
+      await writeFiles(root, {
+        "a.txt": "line1\nline2\nneedle\nline4\nline5\n",
+      });
+
+      const tool = createFilesSearchTool({ config: DEFAULT_PLUGIN_CONFIG });
+      const result = await tool.execute("call", {
+        root,
+        patterns: "needle",
+      });
+      const details = result.details as {
+        matches: Array<{
+          before?: Array<{ line: number; text: string }>;
+          after?: Array<{ line: number; text: string }>;
+        }>;
+      };
+      expect(details.matches[0].before).toEqual([
+        { line: 1, text: "line1" },
+        { line: 2, text: "line2" },
+      ]);
+      expect(details.matches[0].after).toEqual([
+        { line: 4, text: "line4" },
+        { line: 5, text: "line5" },
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("supports outputMode files and counts", async () => {
     const root = await createTempDir();
     try {
@@ -112,7 +172,7 @@ describe("files_search", () => {
         root,
         patterns: ["needle"],
         outputMode: "files",
-        includeGlobs: ["src/**"],
+        include: ["src/**"],
       });
       const filesDetails = filesResult.details as { files: string[] };
       expect(filesDetails.files).toEqual(["src/a.ts", "src/nested/b.ts"]);
@@ -147,10 +207,12 @@ describe("files_search", () => {
 
       const wordResult = await tool.execute("call", {
         root,
-        patterns: ["needle"],
+        patterns: "needle",
         matchMode: "word",
         ignoreCase: true,
         maxMatchesPerFile: 1,
+        beforeContext: 0,
+        afterContext: 0,
       });
       const wordDetails = wordResult.details as {
         matches: Array<{ path: string; line: number; text: string }>;
@@ -162,8 +224,10 @@ describe("files_search", () => {
 
       const lineResult = await tool.execute("call", {
         root,
-        patterns: ["needle"],
+        patterns: "needle",
         matchMode: "line",
+        beforeContext: 0,
+        afterContext: 0,
       });
       const lineDetails = lineResult.details as {
         matches: Array<{ path: string; line: number; text: string }>;
@@ -176,8 +240,10 @@ describe("files_search", () => {
 
       const fixedResult = await tool.execute("call", {
         root,
-        patterns: ["needle."],
+        patterns: "needle.",
         matchMode: "fixed",
+        beforeContext: 0,
+        afterContext: 0,
       });
       const fixedDetails = fixedResult.details as { matches: unknown[] };
       expect(fixedDetails.matches).toEqual([]);
@@ -196,7 +262,7 @@ describe("files_search", () => {
       const tool = createFilesSearchTool({ config: DEFAULT_PLUGIN_CONFIG });
       const result = await tool.execute("call", {
         root,
-        patterns: ["needle"],
+        patterns: "needle",
         afterContext: 1,
         beforeContext: 1,
       });
@@ -243,7 +309,9 @@ describe("files_search", () => {
       const tool = createFilesSearchTool({ config: DEFAULT_PLUGIN_CONFIG });
       const result = await tool.execute("call", {
         root,
-        patterns: ["needle"],
+        patterns: "needle",
+        beforeContext: 0,
+        afterContext: 0,
       });
       const details = result.details as { matches: Array<{ path: string }> };
       expect(details.matches.map((m) => m.path)).toEqual(["kept.txt"]);
@@ -267,7 +335,7 @@ describe("files_search", () => {
       });
 
       await expect(
-        tool.execute("call", { root: outsideRoot, patterns: ["needle"] }),
+        tool.execute("call", { root: outsideRoot, patterns: "needle" }),
       ).rejects.toThrow("root must stay within the active workspace");
     } finally {
       await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -297,8 +365,10 @@ describe("files_search", () => {
 
       const result = await tool.execute("call", {
         root: projectRoot,
-        patterns: ["needle"],
+        patterns: "needle",
         followSymlinks: true,
+        beforeContext: 0,
+        afterContext: 0,
       });
       const details = result.details as {
         matches: Array<{ path: string; line: number; text: string }>;
@@ -318,7 +388,12 @@ describe("files_search", () => {
       const tool = createFilesSearchTool({
         config: { ...DEFAULT_PLUGIN_CONFIG, maxSearchResults: 2 },
       });
-      const result = await tool.execute("call", { root, patterns: ["needle"] });
+      const result = await tool.execute("call", {
+        root,
+        patterns: "needle",
+        beforeContext: 0,
+        afterContext: 0,
+      });
       const details = result.details as { truncated: boolean; matches: unknown[] };
       expect(details.truncated).toBe(true);
       expect(details.matches).toHaveLength(2);

@@ -6,7 +6,7 @@ import { createFilesGlobTool } from "../src/files-glob-tool.ts";
 import { createTempDir, writeFiles } from "./helpers.ts";
 
 describe("files_glob", () => {
-  it("returns root-relative POSIX paths and honors exclude globs", async () => {
+  it("returns root-relative POSIX paths and honors exclude", async () => {
     const root = await createTempDir();
     try {
       await writeFiles(root, {
@@ -20,7 +20,7 @@ describe("files_glob", () => {
       const result = await tool.execute("call", {
         root,
         patterns: ["src/**/*.ts"],
-        excludeGlobs: ["*.test.ts"],
+        exclude: "*.test.ts",
       });
       const details = result.details as { files: string[]; truncated: boolean; count: number };
       const realRoot = await fs.realpath(root);
@@ -31,6 +31,26 @@ describe("files_glob", () => {
         count: 2,
         files: ["src/index.ts", "src/util.ts"],
       });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a bare string for patterns", async () => {
+    const root = await createTempDir();
+    try {
+      await writeFiles(root, {
+        "a.ts": "a",
+        "b.js": "b",
+      });
+
+      const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
+      const result = await tool.execute("call", {
+        root,
+        patterns: "*.ts",
+      });
+      const details = result.details as { files: string[] };
+      expect(details.files).toEqual(["a.ts"]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -49,10 +69,9 @@ describe("files_glob", () => {
         config: { ...DEFAULT_PLUGIN_CONFIG, maxGlobResults: 2 },
       });
 
-      // User requests 10, but config caps at 2
       const result = await tool.execute("call", {
         root,
-        patterns: ["*.ts"],
+        patterns: "*.ts",
         maxResults: 10,
       });
       const details = result.details as { files: string[]; truncated: boolean; count: number };
@@ -68,7 +87,7 @@ describe("files_glob", () => {
     try {
       const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
       await expect(
-        tool.execute("call", { root, patterns: ["*.ts"], maxResults: 1.5 }),
+        tool.execute("call", { root, patterns: "*.ts", maxResults: 1.5 }),
       ).rejects.toThrow("maxResults must be a positive integer");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
@@ -87,7 +106,7 @@ describe("files_glob", () => {
       const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
       const result = await tool.execute("call", {
         root,
-        patterns: ["*.ts"],
+        patterns: "*.ts",
       });
       const details = result.details as { files: string[] };
       expect(details.files).toEqual(["kept.ts"]);
@@ -96,11 +115,10 @@ describe("files_glob", () => {
     }
   });
 
-  it("rejects escaping relative paths and non-absolute roots", async () => {
+  it("rejects non-absolute roots", async () => {
     const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
-
     await expect(
-      tool.execute("call", { root: "relative/path", patterns: ["*.ts"] }),
+      tool.execute("call", { root: "relative/path", patterns: "*.ts" }),
     ).rejects.toThrow("root must be an absolute path");
   });
 
@@ -119,7 +137,7 @@ describe("files_glob", () => {
       });
 
       await expect(
-        tool.execute("call", { root: outsideRoot, patterns: ["**/*"] }),
+        tool.execute("call", { root: outsideRoot, patterns: "**/*" }),
       ).rejects.toThrow("root must stay within the active workspace");
 
       const insideDir = path.join(workspaceRoot, "nested");
@@ -128,7 +146,7 @@ describe("files_glob", () => {
 
       const result = await tool.execute("call", {
         root: insideDir,
-        patterns: ["*.ts"],
+        patterns: "*.ts",
       });
       const details = result.details as { files: string[] };
       expect(details.files).toEqual(["a.ts"]);
@@ -160,7 +178,7 @@ describe("files_glob", () => {
 
       const result = await tool.execute("call", {
         root: projectRoot,
-        patterns: ["**/*.txt"],
+        patterns: "**/*.txt",
         followSymlinks: true,
       });
       const details = result.details as { files: string[] };
