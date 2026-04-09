@@ -214,6 +214,8 @@ export async function runLineCommand(params: LineRunnerParams): Promise<{
 
     const remainingBytes = MAX_STDERR_BYTES - stderrBytes;
     if (buffer.length > remainingBytes) {
+      // This truncates on a byte boundary, which can split a UTF-8 codepoint, but stderr
+      // here is only diagnostic output and the hard memory cap matters more than perfect decoding.
       stderrChunks.push(buffer.subarray(0, remainingBytes));
       stderrBytes += remainingBytes;
       stderrTruncated = true;

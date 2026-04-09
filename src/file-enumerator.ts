@@ -27,6 +27,8 @@ type IgnoreInspector = {
   ignores: (relativePath: string) => Promise<boolean>;
 };
 
+// fast-glob exposes stream() but not a more specific exported stream type in this version,
+// so we narrow it to the parts we rely on for async iteration and cancellation.
 type GlobStream = NodeJS.ReadableStream &
   AsyncIterable<string | Buffer> & {
     destroy: (error?: Error) => void;
