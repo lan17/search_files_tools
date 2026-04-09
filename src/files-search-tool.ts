@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { SearchFilesPluginConfig } from "./config.ts";
-import { toPosixRelativePath, resolveValidatedRoot, createRealpathChecker, createGlobMatcher } from "./path-utils.ts";
+import { toPosixRelativePath, resolveValidatedRoot, createRealpathChecker, createGlobMatcher, readStringOrArray, sanitizeExcludePatterns } from "./path-utils.ts";
 import {
   runRipgrepSearch,
   type MatchMode,
@@ -77,25 +77,6 @@ function readOptionalPositiveInteger(value: unknown, label: string): number | un
   return value;
 }
 
-/** Accept a string, an array of strings, or undefined. Always return a string[]. */
-function readStringOrArray(value: unknown, label: string): string[] {
-  if (value === undefined) {
-    return [];
-  }
-  if (typeof value === "string") {
-    return value.trim() ? [value] : [];
-  }
-  if (!Array.isArray(value)) {
-    throw new Error(`${label} must be a string or array of strings`);
-  }
-  for (const entry of value) {
-    if (typeof entry !== "string") {
-      throw new Error(`${label} entries must be strings`);
-    }
-  }
-  return value as string[];
-}
-
 function readPatterns(value: unknown): string[] {
   if (typeof value === "string") {
     if (!value.trim()) {
@@ -170,7 +151,7 @@ export function createFilesSearchTool(params: {
     name: "files_search",
     label: "Files Search",
     description:
-      "Search for a function, variable, string, or regex pattern in file contents. Use this to find where something is defined, imported, or referenced. Returns matching lines with surrounding context. Respects .gitignore by default.",
+      'Search for a function, variable, string, or pattern in file contents. Use this to find where something is defined, imported, or referenced. Patterns are regex by default — use matchMode "fixed" for literal strings. Returns matching lines with 2 lines of surrounding context by default. Respects .gitignore.',
     parameters: FilesSearchSchema,
     execute: async (_toolCallId, rawParams, signal) => {
       const root = await resolveValidatedRoot(rawParams.root, params.context);
@@ -178,7 +159,7 @@ export function createFilesSearchTool(params: {
       const matchMode = readMatchMode(rawParams.matchMode);
       const outputMode = readOutputMode(rawParams.outputMode);
       const include = readStringOrArray(rawParams.include, "include");
-      const exclude = readStringOrArray(rawParams.exclude, "exclude");
+      const exclude = sanitizeExcludePatterns(readStringOrArray(rawParams.exclude, "exclude"));
       const beforeContext = readNonNegativeInteger(
         rawParams.beforeContext,
         "beforeContext",

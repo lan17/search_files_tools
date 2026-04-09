@@ -8,7 +8,8 @@ OpenClaw plugin for searching and globbing files from agents. Requires
 - `files_search`: search file contents under an absolute root directory.
 - `files_glob`: list files matching glob patterns under an absolute root directory.
 - Shared root validation and OpenClaw filesystem policy enforcement.
-- Respects `.gitignore` by default (handled natively by `rg`).
+- Respects `.gitignore` by default via `rg --no-require-git` (works even
+  outside git repositories when a `.gitignore` is present).
 
 ## Install
 
@@ -36,32 +37,34 @@ The plugin exposes three operational caps under
 
 ### `files_search`
 
-Search files below an absolute `root` path.
+Search for text patterns in file contents. Patterns are regex by default;
+use `matchMode: "fixed"` for literal strings. Returns 2 lines of context
+around each match by default.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `root` | `string` | **Required.** Absolute directory to search. |
-| `patterns` | `string[]` | **Required.** Search patterns (regex by default). |
+| `patterns` | `string \| string[]` | **Required.** Search pattern(s). Regex by default. |
 | `matchMode` | `"regex" \| "fixed" \| "word" \| "line"` | How patterns are interpreted. Default: `"regex"`. |
 | `outputMode` | `"matches" \| "files" \| "counts"` | What to return. Default: `"matches"`. |
-| `includeGlobs` | `string[]` | Restrict searched files (gitignore-style). |
-| `excludeGlobs` | `string[]` | Exclude files from search. |
+| `include` | `string \| string[]` | Restrict searched files by glob (e.g., `"*.ts"`). |
+| `exclude` | `string \| string[]` | Exclude files by glob (e.g., `"*.test.ts"`). |
 | `ignoreCase` | `boolean` | Case-insensitive matching. |
-| `beforeContext` | `integer` | Context lines before each match. |
-| `afterContext` | `integer` | Context lines after each match. |
+| `beforeContext` | `integer` | Context lines before each match. Default: `2`. |
+| `afterContext` | `integer` | Context lines after each match. Default: `2`. |
 | `maxMatchesPerFile` | `integer` | Cap matches returned per file. |
 | `includeHidden` | `boolean` | Include dotfiles. |
 | `followSymlinks` | `boolean` | Follow symbolic links. |
 
 ### `files_glob`
 
-List files below an absolute `root` path that match one or more glob patterns.
+Find files by name or path pattern. Patterns like `*.ts` match at any depth.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `root` | `string` | **Required.** Absolute directory to list files in. |
-| `patterns` | `string[]` | **Required.** Glob patterns (gitignore-style). |
-| `excludeGlobs` | `string[]` | Glob patterns to exclude. |
+| `patterns` | `string \| string[]` | **Required.** Glob pattern(s) (e.g., `"*.ts"`). |
+| `exclude` | `string \| string[]` | Glob patterns to exclude. |
 | `includeHidden` | `boolean` | Include dotfiles. |
 | `followSymlinks` | `boolean` | Follow symbolic links. |
 | `maxResults` | `integer` | Result cap (capped at config `maxGlobResults`). |

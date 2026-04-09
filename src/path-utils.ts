@@ -38,6 +38,30 @@ export function createRealpathChecker(rootReal: string): (absolutePath: string) 
   };
 }
 
+/** Strip leading `!` from exclude patterns so prepending `!` for rg doesn't double-negate. */
+export function sanitizeExcludePatterns(patterns: string[]): string[] {
+  return patterns.map((p) => (p.startsWith("!") ? p.slice(1) : p)).filter(Boolean);
+}
+
+/** Accept a string, an array of strings, or undefined. Always return a string[]. */
+export function readStringOrArray(value: unknown, label: string): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (typeof value === "string") {
+    return value.trim() ? [value] : [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be a string or array of strings`);
+  }
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      throw new Error(`${label} entries must be strings`);
+    }
+  }
+  return value as string[];
+}
+
 /**
  * Create a glob matcher that handles both basename patterns (e.g. `*.ts`)
  * and path patterns (e.g. `src/**\/*.ts`).  picomatch's `matchBase` option

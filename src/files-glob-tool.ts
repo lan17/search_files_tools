@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { SearchFilesPluginConfig } from "./config.ts";
-import { toPosixRelativePath, resolveValidatedRoot, createRealpathChecker, createGlobMatcher } from "./path-utils.ts";
+import { toPosixRelativePath, resolveValidatedRoot, createRealpathChecker, createGlobMatcher, readStringOrArray, sanitizeExcludePatterns } from "./path-utils.ts";
 import { runRipgrepGlob } from "./search-backend.ts";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "./runtime-api.ts";
 
@@ -28,25 +28,6 @@ const FilesGlobSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-
-/** Accept a string, an array of strings, or undefined. Always return a string[]. */
-function readStringOrArray(value: unknown, label: string): string[] {
-  if (value === undefined) {
-    return [];
-  }
-  if (typeof value === "string") {
-    return value.trim() ? [value] : [];
-  }
-  if (!Array.isArray(value)) {
-    throw new Error(`${label} must be a string or array of strings`);
-  }
-  for (const entry of value) {
-    if (typeof entry !== "string") {
-      throw new Error(`${label} entries must be strings`);
-    }
-  }
-  return value as string[];
-}
 
 function readGlobPatterns(value: unknown): string[] {
   if (typeof value === "string") {
@@ -89,7 +70,7 @@ export function createFilesGlobTool(params: {
     execute: async (_toolCallId, rawParams, signal) => {
       const root = await resolveValidatedRoot(rawParams.root, params.context);
       const patterns = readGlobPatterns(rawParams.patterns);
-      const exclude = readStringOrArray(rawParams.exclude, "exclude");
+      const exclude = sanitizeExcludePatterns(readStringOrArray(rawParams.exclude, "exclude"));
       const maxResults = resolveMaxResults(rawParams.maxResults, params.config.maxGlobResults);
       const followSymlinks = rawParams.followSymlinks === true;
 
