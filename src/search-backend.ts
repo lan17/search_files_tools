@@ -38,6 +38,7 @@ export type SearchParams = {
   timeoutMs: number;
   resultLimit: number;
   signal?: AbortSignal;
+  pathFilter?: (absolutePath: string) => boolean;
 };
 
 export type GlobParams = {
@@ -48,6 +49,7 @@ export type GlobParams = {
   maxResults: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  filter?: (absolutePath: string) => boolean;
 };
 
 export type GlobResult = {
@@ -218,7 +220,7 @@ export function parseRipgrepJsonLine(line: string): RipgrepJsonEntry | null {
 // ─── Search (rg --json) ──────────────────────────────────────────────────
 
 function buildSearchArgs(params: SearchParams): string[] {
-  const args: string[] = ["--json", "-n", "--no-heading", "--color", "never"];
+  const args: string[] = ["--json", "-n", "--no-heading", "--color", "never", "--no-require-git"];
 
   switch (params.matchMode) {
     case "fixed":
@@ -307,9 +309,27 @@ export async function runRipgrepSearch(params: SearchParams): Promise<SearchResu
         if (!absolutePath || typeof lineNumber !== "number") {
           return;
         }
+        if (params.pathFilter && !params.pathFilter(absolutePath)) {
+          return;
+        }
 
         if (params.outputMode === "matches") {
           if (useContext) {
+            // Adjacent match: use new match as after-context for pending match
+            if (pendingMatch && afterRemaining > 0) {
+              if (!pendingMatch.after) {
+                pendingMatch.after = [];
+              }
+              pendingMatch.after.push({ line: lineNumber, text });
+              afterRemaining--;
+            }
+            // Pending match text becomes before-context for next match
+            if (pendingMatch) {
+              beforeBuffer.push({ line: pendingMatch.line, text: pendingMatch.text });
+              if (beforeBuffer.length > params.beforeContext) {
+                beforeBuffer.shift();
+              }
+            }
             flushPendingMatch();
             if (matches.length >= params.resultLimit) {
               truncated = true;
@@ -406,7 +426,7 @@ export async function runRipgrepSearch(params: SearchParams): Promise<SearchResu
 // ─── Glob (rg --files) ───────────────────────────────────────────────────
 
 function buildGlobArgs(params: GlobParams): string[] {
-  const args: string[] = ["--files"];
+  const args: string[] = ["--files", "--no-require-git"];
 
   if (params.includeHidden) {
     args.push("--hidden");
@@ -437,6 +457,9 @@ export async function runRipgrepGlob(params: GlobParams): Promise<GlobResult> {
     onLine: (line, stop) => {
       const trimmed = line.trim();
       if (!trimmed) {
+        return;
+      }
+      if (params.filter && !params.filter(trimmed)) {
         return;
       }
       if (files.length >= params.maxResults) {

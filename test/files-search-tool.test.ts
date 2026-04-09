@@ -186,6 +186,51 @@ describe("files_search", () => {
     }
   });
 
+  it("includes adjacent matches in before/after context", async () => {
+    const root = await createTempDir();
+    try {
+      await writeFiles(root, {
+        "a.txt": "alpha\nneedle\nneedle\nomega\n",
+      });
+
+      const tool = createFilesSearchTool({ config: DEFAULT_PLUGIN_CONFIG });
+      const result = await tool.execute("call", {
+        root,
+        patterns: ["needle"],
+        afterContext: 1,
+        beforeContext: 1,
+      });
+      const details = result.details as {
+        matches: Array<{
+          path: string;
+          line: number;
+          text: string;
+          before?: Array<{ line: number; text: string }>;
+          after?: Array<{ line: number; text: string }>;
+        }>;
+      };
+
+      expect(details.matches).toEqual([
+        {
+          path: "a.txt",
+          line: 2,
+          text: "needle",
+          before: [{ line: 1, text: "alpha" }],
+          after: [{ line: 3, text: "needle" }],
+        },
+        {
+          path: "a.txt",
+          line: 3,
+          text: "needle",
+          before: [{ line: 2, text: "needle" }],
+          after: [{ line: 4, text: "omega" }],
+        },
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("respects .gitignore by default", async () => {
     const root = await createTempDir();
     try {
@@ -194,9 +239,6 @@ describe("files_search", () => {
         "ignored.txt": "needle\n",
         "kept.txt": "needle\n",
       });
-
-      const { execSync } = await import("node:child_process");
-      execSync("git init && git add -A", { cwd: root, stdio: "ignore" });
 
       const tool = createFilesSearchTool({ config: DEFAULT_PLUGIN_CONFIG });
       const result = await tool.execute("call", {

@@ -1,3 +1,4 @@
+import picomatch from "picomatch";
 import path from "node:path";
 import fs from "node:fs/promises";
 import type { OpenClawPluginToolContext } from "./runtime-api.ts";
@@ -35,6 +36,27 @@ export function createRealpathChecker(rootReal: string): (absolutePath: string) 
     cache.set(absolutePath, check);
     return check;
   };
+}
+
+/**
+ * Create a glob matcher that handles both basename patterns (e.g. `*.ts`)
+ * and path patterns (e.g. `src/**\/*.ts`).  picomatch's `matchBase` option
+ * only applies correctly to patterns without a `/`, so we split them.
+ */
+export function createGlobMatcher(
+  patterns: string[],
+  options?: { dot?: boolean },
+): (relativePath: string) => boolean {
+  const baseNamePatterns = patterns.filter((p) => !p.includes("/"));
+  const pathPatterns = patterns.filter((p) => p.includes("/"));
+  const matchers: Array<(input: string) => boolean> = [];
+  if (baseNamePatterns.length > 0) {
+    matchers.push(picomatch(baseNamePatterns, { ...options, matchBase: true }));
+  }
+  if (pathPatterns.length > 0) {
+    matchers.push(picomatch(pathPatterns, options));
+  }
+  return (input: string) => matchers.some((m) => m(input));
 }
 
 export async function resolveValidatedRoot(

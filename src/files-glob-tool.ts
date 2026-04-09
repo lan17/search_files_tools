@@ -1,7 +1,6 @@
-import picomatch from "picomatch";
 import { Type } from "@sinclair/typebox";
 import type { SearchFilesPluginConfig } from "./config.ts";
-import { toPosixRelativePath, resolveValidatedRoot, createRealpathChecker } from "./path-utils.ts";
+import { toPosixRelativePath, resolveValidatedRoot, createRealpathChecker, createGlobMatcher } from "./path-utils.ts";
 import { runRipgrepGlob } from "./search-backend.ts";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "./runtime-api.ts";
 
@@ -85,6 +84,11 @@ export function createFilesGlobTool(params: {
       const maxResults = resolveMaxResults(rawParams.maxResults, params.config.maxGlobResults);
       const followSymlinks = rawParams.followSymlinks === true;
 
+      // Include patterns applied at streaming level so maxResults caps filtered results
+      const isIncluded = createGlobMatcher(patterns, {
+        dot: rawParams.includeHidden === true,
+      });
+
       const result = await runRipgrepGlob({
         root: root.rootReal,
         excludeGlobs,
@@ -93,13 +97,10 @@ export function createFilesGlobTool(params: {
         maxResults,
         timeoutMs: params.config.timeoutMs,
         signal,
+        filter: (absolutePath) => isIncluded(toPosixRelativePath(root.rootReal, absolutePath)),
       });
 
-      // Post-filter include patterns (not passed to rg, which would override gitignore)
-      const isIncluded = picomatch(patterns, { dot: rawParams.includeHidden === true });
-      let files = result.files.filter((f) =>
-        isIncluded(toPosixRelativePath(root.rootReal, f)),
-      );
+      let files = result.files;
       if (followSymlinks) {
         const checker = createRealpathChecker(root.rootReal);
         const allowed: string[] = [];

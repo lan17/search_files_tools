@@ -84,9 +84,6 @@ describe("files_glob", () => {
         "kept.ts": "kept",
       });
 
-      const { execSync } = await import("node:child_process");
-      execSync("git init && git add -A", { cwd: root, stdio: "ignore" });
-
       const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
       const result = await tool.execute("call", {
         root,

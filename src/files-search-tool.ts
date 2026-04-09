@@ -1,7 +1,6 @@
-import picomatch from "picomatch";
 import { Type } from "@sinclair/typebox";
 import type { SearchFilesPluginConfig } from "./config.ts";
-import { toPosixRelativePath, resolveValidatedRoot, createRealpathChecker } from "./path-utils.ts";
+import { toPosixRelativePath, resolveValidatedRoot, createRealpathChecker, createGlobMatcher } from "./path-utils.ts";
 import {
   runRipgrepSearch,
   type MatchMode,
@@ -177,6 +176,16 @@ export function createFilesSearchTool(params: {
       );
       const followSymlinks = rawParams.followSymlinks === true;
 
+      // Build path filter: include globs applied at streaming level so limits are correct
+      let pathFilter: ((absolutePath: string) => boolean) | undefined;
+      if (includeGlobs.length > 0) {
+        const isIncluded = createGlobMatcher(includeGlobs, {
+          dot: rawParams.includeHidden === true,
+        });
+        pathFilter = (absolutePath: string) =>
+          isIncluded(toPosixRelativePath(root.rootReal, absolutePath));
+      }
+
       const result = await runRipgrepSearch({
         root: root.rootReal,
         patterns,
@@ -192,22 +201,8 @@ export function createFilesSearchTool(params: {
         timeoutMs: params.config.timeoutMs,
         resultLimit: params.config.maxSearchResults,
         signal,
+        pathFilter,
       });
-
-      // Post-filter include globs (not passed to rg, which would override gitignore)
-      if (includeGlobs.length > 0) {
-        const isIncluded = picomatch(includeGlobs, { dot: rawParams.includeHidden === true });
-        const matchesInclude = (absolutePath: string) =>
-          isIncluded(toPosixRelativePath(root.rootReal, absolutePath));
-
-        if (outputMode === "matches") {
-          result.matches = result.matches.filter((m) => matchesInclude(m.absolutePath));
-        } else if (outputMode === "files") {
-          result.files = result.files.filter(matchesInclude);
-        } else {
-          result.counts = result.counts.filter((e) => matchesInclude(e.absolutePath));
-        }
-      }
 
       // Post-filter symlink escapes when following symlinks
       if (followSymlinks) {
