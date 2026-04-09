@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_PLUGIN_CONFIG } from "../src/config.ts";
-import { createFilesSearchTool } from "../src/files-search-tool.ts";
+import { createFilesSearchTool, enrichMatchesWithContext } from "../src/files-search-tool.ts";
 import {
   MAX_STDERR_BYTES,
   clearSearchBackendCache,
@@ -115,6 +115,41 @@ describe("files_search", () => {
           text: "second needle",
           before: [{ line: 1, text: "beta" }],
           after: [{ line: 3, text: "trailer" }],
+        },
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves duplicate same-line matches during context enrichment", async () => {
+    const root = await createTempDir();
+    try {
+      const written = await writeFiles(root, {
+        "src/app.ts": "alpha beta\ngamma\n",
+      });
+
+      const enriched = await enrichMatchesWithContext(
+        [
+          { absolutePath: written["src/app.ts"], line: 1, text: "alpha beta" },
+          { absolutePath: written["src/app.ts"], line: 1, text: "alpha beta" },
+        ],
+        0,
+        1,
+      );
+
+      expect(enriched).toEqual([
+        {
+          path: written["src/app.ts"],
+          line: 1,
+          text: "alpha beta",
+          after: [{ line: 2, text: "gamma" }],
+        },
+        {
+          path: written["src/app.ts"],
+          line: 1,
+          text: "alpha beta",
+          after: [{ line: 2, text: "gamma" }],
         },
       ]);
     } finally {

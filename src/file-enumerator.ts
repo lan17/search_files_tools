@@ -147,18 +147,20 @@ export async function enumerateFiles(params: EnumerateFilesParams): Promise<{
       }
 
       const absolutePath = path.resolve(entry.toString());
-      let realAbsolutePath: string;
-      try {
-        realAbsolutePath = await fs.realpath(absolutePath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (params.followSymlinks === true) {
+        let realAbsolutePath: string;
+        try {
+          realAbsolutePath = await fs.realpath(absolutePath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            continue;
+          }
+          throw error;
+        }
+
+        if (!isPathWithinRoot(params.rootReal, realAbsolutePath)) {
           continue;
         }
-        throw error;
-      }
-
-      if (!isPathWithinRoot(params.rootReal, realAbsolutePath)) {
-        continue;
       }
 
       const relativePath = toPosixRelativePath(params.rootReal, absolutePath);
@@ -175,10 +177,9 @@ export async function enumerateFiles(params: EnumerateFilesParams): Promise<{
       });
     }
   } catch (error) {
-    if (aborted && error instanceof Error && error.message === "file enumeration aborted") {
+    if (!(aborted && error instanceof Error && error.message === "file enumeration aborted")) {
       throw error;
     }
-    throw error;
   } finally {
     params.signal?.removeEventListener("abort", abortEnumeration);
     stream.destroy();

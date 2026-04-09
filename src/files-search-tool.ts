@@ -157,7 +157,7 @@ function readOptionalPositiveInteger(value: unknown, label: "maxMatchesPerFile")
   return value;
 }
 
-async function enrichMatchesWithContext(
+export async function enrichMatchesWithContext(
   matches: SearchBackendMatch[],
   beforeContext: number,
   afterContext: number,
