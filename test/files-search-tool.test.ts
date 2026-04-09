@@ -297,6 +297,51 @@ describe("files_search", () => {
     }
   });
 
+  it("preserves real context lines when matches are separated by context", async () => {
+    const root = await createTempDir();
+    try {
+      // a, match, b, c, match — beforeContext:2 should give second match [b, c]
+      await writeFiles(root, {
+        "a.txt": "a\nneedle\nb\nc\nneedle\n",
+      });
+
+      const tool = createFilesSearchTool({ config: DEFAULT_PLUGIN_CONFIG });
+      const result = await tool.execute("call", {
+        root,
+        patterns: "needle",
+        beforeContext: 2,
+        afterContext: 1,
+      });
+      const details = result.details as {
+        matches: Array<{
+          path: string;
+          line: number;
+          text: string;
+          before?: Array<{ line: number; text: string }>;
+          after?: Array<{ line: number; text: string }>;
+        }>;
+      };
+
+      expect(details.matches).toEqual([
+        {
+          path: "a.txt",
+          line: 2,
+          text: "needle",
+          before: [{ line: 1, text: "a" }],
+          after: [{ line: 3, text: "b" }],
+        },
+        {
+          path: "a.txt",
+          line: 5,
+          text: "needle",
+          before: [{ line: 3, text: "b" }, { line: 4, text: "c" }],
+        },
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("respects .gitignore by default", async () => {
     const root = await createTempDir();
     try {

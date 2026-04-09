@@ -56,6 +56,29 @@ describe("files_glob", () => {
     }
   });
 
+  it("preserves whitespace in file names", async () => {
+    const root = await createTempDir();
+    try {
+      await writeFiles(root, {
+        " leading.ts": "a",
+        "trailing .ts": "b",
+        "normal.ts": "c",
+      });
+
+      const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
+      const result = await tool.execute("call", {
+        root,
+        patterns: "*.ts",
+      });
+      const details = result.details as { files: string[] };
+      expect(details.files).toContain(" leading.ts");
+      expect(details.files).toContain("trailing .ts");
+      expect(details.files).toContain("normal.ts");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("supports maxResults truncation capped at config limit", async () => {
     const root = await createTempDir();
     try {

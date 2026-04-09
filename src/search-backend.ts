@@ -319,16 +319,15 @@ export async function runRipgrepSearch(params: SearchParams): Promise<SearchResu
 
         if (params.outputMode === "matches") {
           if (useContext) {
-            // Adjacent match: use new match as after-context for pending match
             if (pendingMatch && afterRemaining > 0) {
+              // Adjacent match (no intervening context): use new match as
+              // after-context for the pending match, and inject the pending
+              // match into beforeBuffer so the new match sees it as before-context.
               if (!pendingMatch.after) {
                 pendingMatch.after = [];
               }
               pendingMatch.after.push({ line: lineNumber, text });
               afterRemaining--;
-            }
-            // Pending match text becomes before-context for next match
-            if (pendingMatch) {
               beforeBuffer.push({ line: pendingMatch.line, text: pendingMatch.text });
               if (beforeBuffer.length > params.beforeContext) {
                 beforeBuffer.shift();
@@ -459,11 +458,10 @@ export async function runRipgrepGlob(params: GlobParams): Promise<GlobResult> {
     timeoutMs: params.timeoutMs,
     signal: params.signal,
     onLine: (line, stop) => {
-      const trimmed = line.trim();
-      if (!trimmed) {
+      if (!line) {
         return;
       }
-      if (params.filter && !params.filter(trimmed)) {
+      if (params.filter && !params.filter(line)) {
         return;
       }
       if (files.length >= params.maxResults) {
@@ -471,7 +469,7 @@ export async function runRipgrepGlob(params: GlobParams): Promise<GlobResult> {
         stop();
         return;
       }
-      files.push(trimmed);
+      files.push(line);
     },
   });
 

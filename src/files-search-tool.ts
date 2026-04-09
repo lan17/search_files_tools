@@ -204,7 +204,11 @@ export function createFilesSearchTool(params: {
         pathFilter,
       });
 
-      // Post-filter symlink escapes when following symlinks
+      // Post-filter symlink escapes when following symlinks.
+      // NOTE: this runs after result limits, so escaped paths can consume budget.
+      // Moving this into the streaming pathFilter would require async realpath
+      // inside a synchronous onLine callback, which isn't feasible. The tradeoff
+      // is acceptable because followSymlinks + escaping symlinks is uncommon.
       if (followSymlinks) {
         if (outputMode === "matches") {
           result.matches = await filterMatchesBySymlink(result.matches, root.rootReal);

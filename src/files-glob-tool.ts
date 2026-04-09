@@ -90,6 +90,8 @@ export function createFilesGlobTool(params: {
         filter: (absolutePath) => isIncluded(toPosixRelativePath(root.rootReal, absolutePath)),
       });
 
+      // Post-filter symlink escapes. Runs after maxResults because realpath is
+      // async and can't be called inside the synchronous onLine callback.
       let files = result.files;
       if (followSymlinks) {
         const checker = createRealpathChecker(root.rootReal);
