@@ -59,7 +59,7 @@ export function readStringOrArray(value: unknown, label: string): string[] {
       throw new Error(`${label} entries must be strings`);
     }
   }
-  return value as string[];
+  return (value as string[]).filter((s) => s.trim());
 }
 
 /**

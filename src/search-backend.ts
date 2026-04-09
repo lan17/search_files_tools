@@ -82,7 +82,7 @@ export async function runLineCommand(params: LineRunnerParams): Promise<{
 
   let stoppedEarly = false;
   let timedOut = false;
-  let aborted = false;
+  let aborted = params.signal?.aborted === true;
   const stderrChunks: Buffer[] = [];
   let stderrBytes = 0;
   let stderrTruncated = false;
@@ -103,7 +103,11 @@ export async function runLineCommand(params: LineRunnerParams): Promise<{
     aborted = true;
     child.kill();
   };
-  params.signal?.addEventListener("abort", abortListener, { once: true });
+  if (aborted) {
+    child.kill();
+  } else {
+    params.signal?.addEventListener("abort", abortListener, { once: true });
+  }
 
   child.stderr.on("data", (chunk: Buffer | string) => {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
