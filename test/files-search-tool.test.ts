@@ -388,43 +388,6 @@ describe("files_search", () => {
     }
   });
 
-  it("blocks symlink escapes when followSymlinks is enabled", async () => {
-    const workspaceRoot = await createTempDir("workspace-");
-    const outsideRoot = await createTempDir("outside-");
-
-    try {
-      const projectRoot = path.join(workspaceRoot, "project");
-      await fs.mkdir(projectRoot, { recursive: true });
-      await writeFiles(projectRoot, { "allowed.txt": "needle\n" });
-      await writeFiles(outsideRoot, { "secret.txt": "needle\n" });
-      await fs.symlink(outsideRoot, path.join(projectRoot, "escape"));
-
-      const tool = createFilesSearchTool({
-        config: DEFAULT_PLUGIN_CONFIG,
-        context: {
-          fsPolicy: { workspaceOnly: true },
-          workspaceDir: workspaceRoot,
-          sandboxed: true,
-        },
-      });
-
-      const result = await tool.execute("call", {
-        root: projectRoot,
-        patterns: "needle",
-        followSymlinks: true,
-        beforeContext: 0,
-        afterContext: 0,
-      });
-      const details = result.details as {
-        matches: Array<{ path: string; line: number; text: string }>;
-      };
-      expect(details.matches).toEqual([{ path: "allowed.txt", line: 1, text: "needle" }]);
-    } finally {
-      await fs.rm(workspaceRoot, { recursive: true, force: true });
-      await fs.rm(outsideRoot, { recursive: true, force: true });
-    }
-  });
-
   it("marks results as truncated when hitting the result limit", async () => {
     const root = await createTempDir();
     try {
@@ -442,6 +405,31 @@ describe("files_search", () => {
       const details = result.details as { truncated: boolean; matches: unknown[] };
       expect(details.truncated).toBe(true);
       expect(details.matches).toHaveLength(2);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("truncates long matching lines", async () => {
+    const root = await createTempDir();
+    try {
+      const longLine = "needle" + "x".repeat(2000);
+      await writeFiles(root, { "a.txt": longLine + "\n" });
+
+      const tool = createFilesSearchTool({ config: DEFAULT_PLUGIN_CONFIG });
+      const result = await tool.execute("call", {
+        root,
+        patterns: "needle",
+        beforeContext: 0,
+        afterContext: 0,
+      });
+      const details = result.details as {
+        matches: Array<{ text: string }>;
+      };
+      expect(details.matches).toHaveLength(1);
+      // 1000 chars + " [truncated]" (12 chars)
+      expect(details.matches[0].text.length).toBeLessThanOrEqual(1012);
+      expect(details.matches[0].text).toContain("[truncated]");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

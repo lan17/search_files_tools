@@ -22,22 +22,6 @@ export function isPathWithinRoot(rootReal: string, targetReal: string): boolean 
   );
 }
 
-export function createRealpathChecker(rootReal: string): (absolutePath: string) => Promise<boolean> {
-  const cache = new Map<string, Promise<boolean>>();
-  return (absolutePath: string) => {
-    const existing = cache.get(absolutePath);
-    if (existing) {
-      return existing;
-    }
-    const check = fs
-      .realpath(absolutePath)
-      .then((realPath) => isPathWithinRoot(rootReal, realPath))
-      .catch(() => false);
-    cache.set(absolutePath, check);
-    return check;
-  };
-}
-
 /** Strip leading `!` from exclude patterns so prepending `!` for rg doesn't double-negate. */
 export function sanitizeExcludePatterns(patterns: string[]): string[] {
   return patterns.map((p) => (p.startsWith("!") ? p.slice(1) : p)).filter(Boolean);

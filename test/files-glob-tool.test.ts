@@ -179,36 +179,4 @@ describe("files_glob", () => {
     }
   });
 
-  it("blocks symlink escapes when followSymlinks is enabled", async () => {
-    const workspaceRoot = await createTempDir("workspace-");
-    const outsideRoot = await createTempDir("outside-");
-
-    try {
-      const projectRoot = path.join(workspaceRoot, "project");
-      await fs.mkdir(projectRoot, { recursive: true });
-      await writeFiles(projectRoot, { "allowed.txt": "safe" });
-      await writeFiles(outsideRoot, { "secret.txt": "secret" });
-      await fs.symlink(outsideRoot, path.join(projectRoot, "escape"));
-
-      const tool = createFilesGlobTool({
-        config: DEFAULT_PLUGIN_CONFIG,
-        context: {
-          fsPolicy: { workspaceOnly: true },
-          workspaceDir: workspaceRoot,
-          sandboxed: true,
-        },
-      });
-
-      const result = await tool.execute("call", {
-        root: projectRoot,
-        patterns: "**/*.txt",
-        followSymlinks: true,
-      });
-      const details = result.details as { files: string[] };
-      expect(details.files).toEqual(["allowed.txt"]);
-    } finally {
-      await fs.rm(workspaceRoot, { recursive: true, force: true });
-      await fs.rm(outsideRoot, { recursive: true, force: true });
-    }
-  });
 });

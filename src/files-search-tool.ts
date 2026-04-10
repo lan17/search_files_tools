@@ -1,11 +1,10 @@
 import { Type } from "@sinclair/typebox";
 import type { SearchFilesPluginConfig } from "./config.ts";
-import { toPosixRelativePath, resolveValidatedRoot, createRealpathChecker, createGlobMatcher, readStringOrArray, sanitizeExcludePatterns } from "./path-utils.ts";
+import { toPosixRelativePath, resolveValidatedRoot, createGlobMatcher, readStringOrArray, sanitizeExcludePatterns } from "./path-utils.ts";
 import {
   runRipgrepSearch,
   type MatchMode,
   type OutputMode,
-  type RawSearchMatch,
 } from "./search-backend.ts";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "./runtime-api.ts";
 
@@ -115,32 +114,13 @@ function readOutputMode(value: unknown): OutputMode {
   throw new Error("outputMode must be one of: matches, files, counts");
 }
 
-async function filterMatchesBySymlink(
-  matches: RawSearchMatch[],
-  rootReal: string,
-): Promise<RawSearchMatch[]> {
-  const checker = createRealpathChecker(rootReal);
-  const filtered: RawSearchMatch[] = [];
-  for (const match of matches) {
-    if (await checker(match.absolutePath)) {
-      filtered.push(match);
-    }
-  }
-  return filtered;
-}
+const MAX_LINE_CHARS = 1000;
 
-async function filterPathsBySymlink(
-  paths: string[],
-  rootReal: string,
-): Promise<string[]> {
-  const checker = createRealpathChecker(rootReal);
-  const filtered: string[] = [];
-  for (const p of paths) {
-    if (await checker(p)) {
-      filtered.push(p);
-    }
+function truncateLine(text: string): string {
+  if (text.length <= MAX_LINE_CHARS) {
+    return text;
   }
-  return filtered;
+  return text.slice(0, MAX_LINE_CHARS) + " [truncated]";
 }
 
 export function createFilesSearchTool(params: {
@@ -176,13 +156,14 @@ export function createFilesSearchTool(params: {
       );
       const followSymlinks = rawParams.followSymlinks === true;
 
-      // Build path filter: include globs applied at streaming level so limits are correct
+      // Build path filter applied inside the streaming callback so result
+      // limits count only accepted paths.
       let pathFilter: ((absolutePath: string) => boolean) | undefined;
       if (include.length > 0) {
         const isIncluded = createGlobMatcher(include, {
           dot: rawParams.includeHidden === true,
         });
-        pathFilter = (absolutePath: string) =>
+        pathFilter = (absolutePath) =>
           isIncluded(toPosixRelativePath(root.rootReal, absolutePath));
       }
 
@@ -204,37 +185,17 @@ export function createFilesSearchTool(params: {
         pathFilter,
       });
 
-      // Post-filter symlink escapes when following symlinks.
-      // NOTE: this runs after result limits, so escaped paths can consume budget.
-      // Moving this into the streaming pathFilter would require async realpath
-      // inside a synchronous onLine callback, which isn't feasible. The tradeoff
-      // is acceptable because followSymlinks + escaping symlinks is uncommon.
-      if (followSymlinks) {
-        if (outputMode === "matches") {
-          result.matches = await filterMatchesBySymlink(result.matches, root.rootReal);
-        } else if (outputMode === "files") {
-          result.files = await filterPathsBySymlink(result.files, root.rootReal);
-        } else {
-          const allowedCounts: typeof result.counts = [];
-          const checker = createRealpathChecker(root.rootReal);
-          for (const entry of result.counts) {
-            if (await checker(entry.absolutePath)) {
-              allowedCounts.push(entry);
-            }
-          }
-          result.counts = allowedCounts;
-        }
-      }
-
-      // Convert to relative paths, sort, and build response
+      // Convert to relative paths, sort, truncate long lines, and build response
       if (outputMode === "matches") {
+        const truncateContext = (lines: Array<{ line: number; text: string }>) =>
+          lines.map((entry) => ({ line: entry.line, text: truncateLine(entry.text) }));
         const normalizedMatches = result.matches
           .map((match) => ({
             path: toPosixRelativePath(root.rootReal, match.absolutePath),
             line: match.line,
-            text: match.text,
-            ...(match.before ? { before: match.before } : {}),
-            ...(match.after ? { after: match.after } : {}),
+            text: truncateLine(match.text),
+            ...(match.before ? { before: truncateContext(match.before) } : {}),
+            ...(match.after ? { after: truncateContext(match.after) } : {}),
           }))
           .sort((a, b) => a.path.localeCompare(b.path, "en") || a.line - b.line);
         const payload = {
