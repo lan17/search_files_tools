@@ -18,14 +18,14 @@ triggers OpenClaw's dangerous-code scanner. You need the
 `--dangerously-force-unsafe-install` flag:
 
 ```bash
-openclaw plugins install search-files-tools --dangerously-force-unsafe-install
+openclaw plugins install search-files-tools
 ```
 
 For local development:
 
 ```bash
 npm install
-openclaw plugins install -l /absolute/path/to/search_files_tools --dangerously-force-unsafe-install
+openclaw plugins install -l /absolute/path/to/search_files_tools
 ```
 
 ## Configuration
