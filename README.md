@@ -3,6 +3,8 @@
 OpenClaw plugin for searching and globbing files from agents. Requires
 [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`).
 
+Having separate tools for just searching and globbing files is useful to avoid having to use `exec` command.  The surface area of these tools is also designed to be friendlier to LLMs.
+
 ## Features
 
 - `files_search`: search file contents under an absolute root directory.
