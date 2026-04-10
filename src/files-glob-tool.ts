@@ -1,44 +1,51 @@
 import { Type } from "@sinclair/typebox";
-import { enumerateFiles } from "./file-enumerator.ts";
 import type { SearchFilesPluginConfig } from "./config.ts";
-import {
-  normalizeGlobInput,
-  normalizeRelativePathList,
-  resolveValidatedRoot,
-} from "./path-utils.ts";
+import { toPosixRelativePath, resolveValidatedRoot, createRealpathChecker, createGlobMatcher, readStringOrArray, sanitizeExcludePatterns } from "./path-utils.ts";
+import { runRipgrepGlob } from "./search-backend.ts";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "./runtime-api.ts";
 
 const FilesGlobSchema = Type.Object(
   {
-    root: Type.String({ description: "Absolute directory under which globbing is performed." }),
-    patterns: Type.Array(Type.String(), {
-      description: "One or more glob patterns relative to root.",
-      minItems: 1,
+    root: Type.String({ description: "Absolute directory to list files in." }),
+    patterns: Type.Union([Type.String(), Type.Array(Type.String(), { minItems: 1 })], {
+      description: 'One or more glob patterns. Pass a string (e.g., "*.ts") or an array (e.g., ["*.ts", "src/**"]). Patterns like "*.ts" match at any depth.',
     }),
-    paths: Type.Optional(
-      Type.Array(Type.String(), {
-        description: "Optional relative subpaths under root used to narrow returned files.",
+    exclude: Type.Optional(
+      Type.Union([Type.String(), Type.Array(Type.String())], {
+        description: 'Glob patterns to exclude (e.g., "*.test.ts" or ["dist/**", "*.min.js"]).',
       }),
     ),
-    excludeGlobs: Type.Optional(
-      Type.Array(Type.String(), {
-        description: "Optional glob patterns to exclude, relative to root.",
-      }),
+    includeHidden: Type.Optional(
+      Type.Boolean({ description: "Include dotfiles and dot-directories." }),
     ),
-    includeHidden: Type.Optional(Type.Boolean({ description: "Include dotfiles and dot-directories." })),
-    respectIgnoreFiles: Type.Optional(
-      Type.Boolean({ description: "Respect .gitignore and related ignore files when enumerating." }),
-    ),
-    followSymlinks: Type.Optional(Type.Boolean({ description: "Follow symbolic links while globbing." })),
+    followSymlinks: Type.Optional(Type.Boolean({ description: "Follow symbolic links." })),
     maxResults: Type.Optional(
       Type.Integer({
-        description: "Optional per-call result cap. Defaults to the plugin maxGlobResults limit.",
+        description: "Result cap. Defaults to the plugin maxGlobResults limit.",
         minimum: 1,
       }),
     ),
   },
   { additionalProperties: false },
 );
+
+function readGlobPatterns(value: unknown): string[] {
+  if (typeof value === "string") {
+    if (!value.trim()) {
+      throw new Error("patterns must be a non-empty string or array");
+    }
+    return [value];
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("patterns is required");
+  }
+  for (const entry of value) {
+    if (typeof entry !== "string" || !entry.trim()) {
+      throw new Error("each glob pattern must be a non-empty string");
+    }
+  }
+  return value as string[];
+}
 
 function resolveMaxResults(rawValue: unknown, configuredCap: number): number {
   if (rawValue === undefined) {
@@ -57,39 +64,54 @@ export function createFilesGlobTool(params: {
   return {
     name: "files_glob",
     label: "Files Glob",
-    description: "List files matching glob patterns under an absolute root directory.",
+    description:
+      "Find files by name or path pattern. Use this to discover what files exist, find files by extension (e.g., \"*.py\"), or list a directory's contents. Returns file paths relative to root. Respects .gitignore by default.",
     parameters: FilesGlobSchema,
     execute: async (_toolCallId, rawParams, signal) => {
       const root = await resolveValidatedRoot(rawParams.root, params.context);
-      const patterns = normalizeRelativePathList(rawParams.patterns, "patterns", normalizeGlobInput);
-      if (patterns.length === 0) {
-        throw new Error("patterns is required");
-      }
-      const pathFilters = normalizeRelativePathList(rawParams.paths, "paths");
-      const excludeGlobs = normalizeRelativePathList(
-        rawParams.excludeGlobs,
-        "excludeGlobs",
-        normalizeGlobInput,
-      );
+      const patterns = readGlobPatterns(rawParams.patterns);
+      const exclude = sanitizeExcludePatterns(readStringOrArray(rawParams.exclude, "exclude"));
       const maxResults = resolveMaxResults(rawParams.maxResults, params.config.maxGlobResults);
+      const followSymlinks = rawParams.followSymlinks === true;
 
-      const enumerated = await enumerateFiles({
-        rootReal: root.rootReal,
-        patterns,
-        pathFilters,
-        excludeGlobs,
-        includeHidden: rawParams.includeHidden === true,
-        respectIgnoreFiles: rawParams.respectIgnoreFiles === true,
-        followSymlinks: rawParams.followSymlinks === true,
-        maxResults,
-        signal,
+      // Include patterns applied at streaming level so maxResults caps filtered results
+      const isIncluded = createGlobMatcher(patterns, {
+        dot: rawParams.includeHidden === true,
       });
+
+      const result = await runRipgrepGlob({
+        root: root.rootReal,
+        excludeGlobs: exclude,
+        includeHidden: rawParams.includeHidden === true,
+        followSymlinks,
+        maxResults,
+        timeoutMs: params.config.timeoutMs,
+        signal,
+        filter: (absolutePath) => isIncluded(toPosixRelativePath(root.rootReal, absolutePath)),
+      });
+
+      // Post-filter symlink escapes. Runs after maxResults because realpath is
+      // async and can't be called inside the synchronous onLine callback.
+      let files = result.files;
+      if (followSymlinks) {
+        const checker = createRealpathChecker(root.rootReal);
+        const allowed: string[] = [];
+        for (const f of files) {
+          if (await checker(f)) {
+            allowed.push(f);
+          }
+        }
+        files = allowed;
+      }
+
+      // Convert to relative paths
+      const relativePaths = files.map((f) => toPosixRelativePath(root.rootReal, f));
 
       const payload = {
         root: root.rootReal,
-        truncated: enumerated.truncated,
-        count: enumerated.files.length,
-        files: enumerated.files.map((entry) => entry.relativePath),
+        truncated: result.truncated,
+        count: relativePaths.length,
+        files: relativePaths,
       };
 
       return {

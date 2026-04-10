@@ -6,7 +6,7 @@ import { createFilesGlobTool } from "../src/files-glob-tool.ts";
 import { createTempDir, writeFiles } from "./helpers.ts";
 
 describe("files_glob", () => {
-  it("returns root-relative POSIX paths and honors exclude globs", async () => {
+  it("returns root-relative POSIX paths and honors exclude", async () => {
     const root = await createTempDir();
     try {
       await writeFiles(root, {
@@ -20,7 +20,7 @@ describe("files_glob", () => {
       const result = await tool.execute("call", {
         root,
         patterns: ["src/**/*.ts"],
-        excludeGlobs: ["**/*.test.ts"],
+        exclude: "*.test.ts",
       });
       const details = result.details as { files: string[]; truncated: boolean; count: number };
       const realRoot = await fs.realpath(root);
@@ -36,83 +36,50 @@ describe("files_glob", () => {
     }
   });
 
-  it("supports path narrowing, hidden files, and maxResults truncation", async () => {
+  it("accepts a bare string for patterns", async () => {
     const root = await createTempDir();
     try {
       await writeFiles(root, {
-        "src/a.ts": "a",
-        "src/b.ts": "b",
-        "other/c.ts": "c",
-        ".config/secret.ts": "secret",
+        "a.ts": "a",
+        "b.js": "b",
       });
 
       const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
       const result = await tool.execute("call", {
         root,
-        patterns: ["**/*.ts"],
-        paths: ["src"],
-        includeHidden: true,
-        maxResults: 1,
-      });
-      const details = result.details as { files: string[]; truncated: boolean; count: number };
-
-      expect(details.truncated).toBe(true);
-      expect(details.count).toBe(1);
-      expect(details.files).toEqual(["src/a.ts"]);
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("respects nested ignore files when requested", async () => {
-    const root = await createTempDir();
-    try {
-      await writeFiles(root, {
-        "src/.gitignore": "ignored.ts\n",
-        "src/ignored.ts": "ignored",
-        "src/kept.ts": "kept",
-      });
-
-      const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
-      const result = await tool.execute("call", {
-        root,
-        patterns: ["**/*.ts"],
-        respectIgnoreFiles: true,
+        patterns: "*.ts",
       });
       const details = result.details as { files: string[] };
-
-      expect(details.files).toEqual(["src/kept.ts"]);
+      expect(details.files).toEqual(["a.ts"]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("does not let nested ignore files re-include files from ignored directories", async () => {
+  it("preserves whitespace in file names", async () => {
     const root = await createTempDir();
     try {
       await writeFiles(root, {
-        ".gitignore": "build/\n",
-        "build/.gitignore": "!keep.txt\n",
-        "build/keep.txt": "keep",
-        "kept.txt": "kept",
+        " leading.ts": "a",
+        "trailing .ts": "b",
+        "normal.ts": "c",
       });
 
       const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
       const result = await tool.execute("call", {
         root,
-        patterns: ["**/*.txt"],
-        includeHidden: true,
-        respectIgnoreFiles: true,
+        patterns: "*.ts",
       });
       const details = result.details as { files: string[] };
-
-      expect(details.files).toEqual(["kept.txt"]);
+      expect(details.files).toContain(" leading.ts");
+      expect(details.files).toContain("trailing .ts");
+      expect(details.files).toContain("normal.ts");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("caps maxResults at the configured plugin limit and rejects non-integers", async () => {
+  it("supports maxResults truncation capped at config limit", async () => {
     const root = await createTempDir();
     try {
       await writeFiles(root, {
@@ -122,59 +89,60 @@ describe("files_glob", () => {
       });
 
       const tool = createFilesGlobTool({
-        config: {
-          ...DEFAULT_PLUGIN_CONFIG,
-          maxGlobResults: 2,
-        },
+        config: { ...DEFAULT_PLUGIN_CONFIG, maxGlobResults: 2 },
       });
 
       const result = await tool.execute("call", {
         root,
-        patterns: ["**/*.ts"],
+        patterns: "*.ts",
         maxResults: 10,
       });
       const details = result.details as { files: string[]; truncated: boolean; count: number };
+      expect(details.truncated).toBe(true);
+      expect(details.count).toBe(2);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 
-      expect(details).toMatchObject({
-        truncated: true,
-        count: 2,
-        files: ["a.ts", "b.ts"],
-      });
-
+  it("rejects non-integer maxResults", async () => {
+    const root = await createTempDir();
+    try {
+      const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
       await expect(
-        tool.execute("call", {
-          root,
-          patterns: ["**/*.ts"],
-          maxResults: 1.5,
-        }),
+        tool.execute("call", { root, patterns: "*.ts", maxResults: 1.5 }),
       ).rejects.toThrow("maxResults must be a positive integer");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("rejects escaping relative paths and non-absolute roots", async () => {
-    const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
-
-    await expect(
-      tool.execute("call", {
-        root: "relative/path",
-        patterns: ["**/*.ts"],
-      }),
-    ).rejects.toThrow("root must be an absolute path");
-
+  it("respects .gitignore by default", async () => {
     const root = await createTempDir();
     try {
-      await expect(
-        tool.execute("call", {
-          root,
-          patterns: ["**/*.ts"],
-          paths: ["../escape"],
-        }),
-      ).rejects.toThrow("paths must not escape root");
+      await writeFiles(root, {
+        ".gitignore": "ignored.ts\n",
+        "ignored.ts": "ignored",
+        "kept.ts": "kept",
+      });
+
+      const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
+      const result = await tool.execute("call", {
+        root,
+        patterns: "*.ts",
+      });
+      const details = result.details as { files: string[] };
+      expect(details.files).toEqual(["kept.ts"]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("rejects non-absolute roots", async () => {
+    const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
+    await expect(
+      tool.execute("call", { root: "relative/path", patterns: "*.ts" }),
+    ).rejects.toThrow("root must be an absolute path");
   });
 
   it("honors workspace-only filesystem policy", async () => {
@@ -192,10 +160,7 @@ describe("files_glob", () => {
       });
 
       await expect(
-        tool.execute("call", {
-          root: outsideRoot,
-          patterns: ["**/*"],
-        }),
+        tool.execute("call", { root: outsideRoot, patterns: "**/*" }),
       ).rejects.toThrow("root must stay within the active workspace");
 
       const insideDir = path.join(workspaceRoot, "nested");
@@ -204,7 +169,7 @@ describe("files_glob", () => {
 
       const result = await tool.execute("call", {
         root: insideDir,
-        patterns: ["**/*.ts"],
+        patterns: "*.ts",
       });
       const details = result.details as { files: string[] };
       expect(details.files).toEqual(["a.ts"]);
@@ -221,12 +186,8 @@ describe("files_glob", () => {
     try {
       const projectRoot = path.join(workspaceRoot, "project");
       await fs.mkdir(projectRoot, { recursive: true });
-      await writeFiles(projectRoot, {
-        "allowed.txt": "safe",
-      });
-      await writeFiles(outsideRoot, {
-        "secret.txt": "secret",
-      });
+      await writeFiles(projectRoot, { "allowed.txt": "safe" });
+      await writeFiles(outsideRoot, { "secret.txt": "secret" });
       await fs.symlink(outsideRoot, path.join(projectRoot, "escape"));
 
       const tool = createFilesGlobTool({
@@ -240,40 +201,14 @@ describe("files_glob", () => {
 
       const result = await tool.execute("call", {
         root: projectRoot,
-        patterns: ["**/*.txt"],
+        patterns: "**/*.txt",
         followSymlinks: true,
       });
       const details = result.details as { files: string[] };
-
       expect(details.files).toEqual(["allowed.txt"]);
     } finally {
       await fs.rm(workspaceRoot, { recursive: true, force: true });
       await fs.rm(outsideRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("supports cancellation while globbing", async () => {
-    const root = await createTempDir();
-    try {
-      await writeFiles(root, {
-        "a.ts": "a",
-      });
-      const tool = createFilesGlobTool({ config: DEFAULT_PLUGIN_CONFIG });
-      const controller = new AbortController();
-      controller.abort();
-
-      await expect(
-        tool.execute(
-          "call",
-          {
-            root,
-            patterns: ["**/*.ts"],
-          },
-          controller.signal,
-        ),
-      ).rejects.toThrow("file enumeration aborted");
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });

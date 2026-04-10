@@ -1,3 +1,4 @@
+import picomatch from "picomatch";
 import path from "node:path";
 import fs from "node:fs/promises";
 import type { OpenClawPluginToolContext } from "./runtime-api.ts";
@@ -8,79 +9,8 @@ export type ResolvedRoot = {
   workspaceDirReal?: string;
 };
 
-function normalizeUserPath(value: string): string {
-  return value.trim().replaceAll("\\", "/");
-}
-
-function hasParentTraversal(value: string): boolean {
-  return normalizeUserPath(value)
-    .split("/")
-    .some((segment) => segment === "..");
-}
-
 export function toPosixRelativePath(rootReal: string, absolutePath: string): string {
   return path.relative(rootReal, absolutePath).split(path.sep).join("/");
-}
-
-export function normalizeRelativePathInput(value: string, label: string): string {
-  const normalized = normalizeUserPath(value);
-  if (!normalized || normalized === ".") {
-    return ".";
-  }
-  if (path.isAbsolute(normalized)) {
-    throw new Error(`${label} must be relative to root`);
-  }
-  if (hasParentTraversal(normalized)) {
-    throw new Error(`${label} must not escape root`);
-  }
-  return normalized.replace(/^\.\/+/u, "");
-}
-
-export function normalizeGlobInput(value: string, label: string): string {
-  const normalized = normalizeUserPath(value);
-  if (!normalized) {
-    throw new Error(`${label} cannot be empty`);
-  }
-  if (path.isAbsolute(normalized)) {
-    throw new Error(`${label} must be relative to root`);
-  }
-  if (hasParentTraversal(normalized)) {
-    throw new Error(`${label} must not escape root`);
-  }
-  return normalized.replace(/^\.\/+/u, "");
-}
-
-export function normalizeRelativePathList(
-  values: unknown,
-  label: string,
-  normalizer: (value: string, entryLabel: string) => string = normalizeRelativePathInput,
-): string[] {
-  if (values === undefined) {
-    return [];
-  }
-  if (!Array.isArray(values)) {
-    throw new Error(`${label} must be an array of strings`);
-  }
-  const result = new Set<string>();
-  for (const entry of values) {
-    if (typeof entry !== "string") {
-      throw new Error(`${label} must be an array of strings`);
-    }
-    result.add(normalizer(entry, label));
-  }
-  return Array.from(result);
-}
-
-export function isPathWithinFilters(relativePath: string, filters: string[]): boolean {
-  if (filters.length === 0) {
-    return true;
-  }
-  return filters.some((filter) => {
-    if (filter === ".") {
-      return true;
-    }
-    return relativePath === filter || relativePath.startsWith(`${filter}/`);
-  });
 }
 
 export function isPathWithinRoot(rootReal: string, targetReal: string): boolean {
@@ -90,6 +20,67 @@ export function isPathWithinRoot(rootReal: string, targetReal: string): boolean 
     relativeToRoot.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relativeToRoot)
   );
+}
+
+export function createRealpathChecker(rootReal: string): (absolutePath: string) => Promise<boolean> {
+  const cache = new Map<string, Promise<boolean>>();
+  return (absolutePath: string) => {
+    const existing = cache.get(absolutePath);
+    if (existing) {
+      return existing;
+    }
+    const check = fs
+      .realpath(absolutePath)
+      .then((realPath) => isPathWithinRoot(rootReal, realPath))
+      .catch(() => false);
+    cache.set(absolutePath, check);
+    return check;
+  };
+}
+
+/** Strip leading `!` from exclude patterns so prepending `!` for rg doesn't double-negate. */
+export function sanitizeExcludePatterns(patterns: string[]): string[] {
+  return patterns.map((p) => (p.startsWith("!") ? p.slice(1) : p)).filter(Boolean);
+}
+
+/** Accept a string, an array of strings, or undefined. Always return a string[]. */
+export function readStringOrArray(value: unknown, label: string): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (typeof value === "string") {
+    return value.trim() ? [value] : [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be a string or array of strings`);
+  }
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      throw new Error(`${label} entries must be strings`);
+    }
+  }
+  return (value as string[]).filter((s) => s.trim());
+}
+
+/**
+ * Create a glob matcher that handles both basename patterns (e.g. `*.ts`)
+ * and path patterns (e.g. `src/**\/*.ts`).  picomatch's `matchBase` option
+ * only applies correctly to patterns without a `/`, so we split them.
+ */
+export function createGlobMatcher(
+  patterns: string[],
+  options?: { dot?: boolean },
+): (relativePath: string) => boolean {
+  const baseNamePatterns = patterns.filter((p) => !p.includes("/"));
+  const pathPatterns = patterns.filter((p) => p.includes("/"));
+  const matchers: Array<(input: string) => boolean> = [];
+  if (baseNamePatterns.length > 0) {
+    matchers.push(picomatch(baseNamePatterns, { ...options, matchBase: true }));
+  }
+  if (pathPatterns.length > 0) {
+    matchers.push(picomatch(pathPatterns, options));
+  }
+  return (input: string) => matchers.some((m) => m(input));
 }
 
 export async function resolveValidatedRoot(

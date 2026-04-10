@@ -11,11 +11,6 @@
         "minimum": 1,
         "default": 20000
       },
-      "maxCandidateFiles": {
-        "type": "integer",
-        "minimum": 1,
-        "default": 20000
-      },
       "maxSearchResults": {
         "type": "integer",
         "minimum": 1,
@@ -32,10 +27,6 @@
     "timeoutMs": {
       "label": "Timeout (ms)",
       "help": "Maximum wall-clock time for each search or glob tool invocation."
-    },
-    "maxCandidateFiles": {
-      "label": "Max Candidate Files",
-      "help": "Maximum number of candidate files to enumerate before marking the search as truncated."
     },
     "maxSearchResults": {
       "label": "Max Search Results",

@@ -5,7 +5,7 @@
   "keywords": [
     "openclaw",
     "openclaw-plugin",
-    "grep",
+    "ripgrep",
     "glob",
     "files"
   ],
@@ -39,8 +39,7 @@
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.41",
-    "fast-glob": "^3.3.3",
-    "ignore": "^7.0.5"
+    "picomatch": "^4.0.4"
   },
   "devDependencies": {
     "@semantic-release/commit-analyzer": "^13.0.1",
