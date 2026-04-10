@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { SearchFilesPluginConfig } from "./config.ts";
-import { toPosixRelativePath, resolveValidatedRoot, createRealpathChecker, createGlobMatcher, readStringOrArray, sanitizeExcludePatterns } from "./path-utils.ts";
+import { toPosixRelativePath, resolveValidatedRoot, createGlobMatcher, readStringOrArray, sanitizeExcludePatterns } from "./path-utils.ts";
 import { runRipgrepGlob } from "./search-backend.ts";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "./runtime-api.ts";
 
@@ -74,10 +74,13 @@ export function createFilesGlobTool(params: {
       const maxResults = resolveMaxResults(rawParams.maxResults, params.config.maxGlobResults);
       const followSymlinks = rawParams.followSymlinks === true;
 
-      // Include patterns applied at streaming level so maxResults caps filtered results
+      // Include-glob filter applied at streaming level so maxResults counts
+      // only accepted paths.
       const isIncluded = createGlobMatcher(patterns, {
         dot: rawParams.includeHidden === true,
       });
+      const filter = (absolutePath: string) =>
+        isIncluded(toPosixRelativePath(root.rootReal, absolutePath));
 
       const result = await runRipgrepGlob({
         root: root.rootReal,
@@ -87,25 +90,11 @@ export function createFilesGlobTool(params: {
         maxResults,
         timeoutMs: params.config.timeoutMs,
         signal,
-        filter: (absolutePath) => isIncluded(toPosixRelativePath(root.rootReal, absolutePath)),
+        filter,
       });
 
-      // Post-filter symlink escapes. Runs after maxResults because realpath is
-      // async and can't be called inside the synchronous onLine callback.
-      let files = result.files;
-      if (followSymlinks) {
-        const checker = createRealpathChecker(root.rootReal);
-        const allowed: string[] = [];
-        for (const f of files) {
-          if (await checker(f)) {
-            allowed.push(f);
-          }
-        }
-        files = allowed;
-      }
-
       // Convert to relative paths
-      const relativePaths = files.map((f) => toPosixRelativePath(root.rootReal, f));
+      const relativePaths = result.files.map((f) => toPosixRelativePath(root.rootReal, f));
 
       const payload = {
         root: root.rootReal,
