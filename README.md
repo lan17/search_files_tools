@@ -13,6 +13,10 @@ OpenClaw plugin for searching and globbing files from agents. Requires
 
 ## Install
 
+This plugin uses `child_process.spawn` to invoke ripgrep, which
+triggers OpenClaw's dangerous-code scanner. You need the
+`--dangerously-force-unsafe-install` flag:
+
 ```bash
 openclaw plugins install search-files-tools
 ```
